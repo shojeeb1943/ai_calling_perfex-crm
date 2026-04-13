@@ -85,7 +85,10 @@ class Ai_calling_model extends App_Model
             $this->db->group_end();
         $this->db->group_end();
 
-        $this->db->order_by('id', 'DESC'); // newest leads first
+        // Failed/retry leads always come first so unconnected leads are
+        // re-attempted before new pending ones. Within each group, newest first.
+        $this->db->order_by('CASE WHEN ai_call_status = \'failed\' THEN 0 ELSE 1 END', 'ASC', false);
+        $this->db->order_by('id', 'DESC');
         $this->db->limit((int) $limit);
 
         return $this->db->get()->result_array();

@@ -290,10 +290,13 @@ class Ai_calling extends AdminController
 
         // Reset leads marked "called" today that have no summary —
         // these are SIP failures where the webhook never set a real outcome.
+        // Mark as 'failed' (not pending) so the dashboard counter is accurate
+        // and the ordering query puts them at the front of the next session.
         // Decrement followup_count so the failed attempt is not penalised.
         $this->db->query("
             UPDATE tblleads
-            SET    ai_call_status     = 'pending',
+            SET    ai_call_status     = 'failed',
+                   ai_call_summary    = 'SIP connection failed (auto-reset)',
                    next_followup_date = NULL,
                    followup_count     = GREATEST(0, followup_count - 1)
             WHERE  ai_call_status    = 'called'
