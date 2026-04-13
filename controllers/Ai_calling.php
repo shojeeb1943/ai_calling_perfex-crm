@@ -505,6 +505,9 @@ class Ai_calling extends AdminController
             ],
         ];
 
+        // Log the outbound request for debugging SIP issues
+        $this->_log_call_attempt($lead, $phone, $payload);
+
         $ch = curl_init(AI_VAPI_API_URL);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -514,14 +517,18 @@ class Ai_calling extends AdminController
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . AI_VAPI_API_KEY,
             ],
-            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_TIMEOUT        => 30,
             CURLOPT_SSL_VERIFYPEER => false,
         ]);
 
         $response  = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curl_err  = curl_error($ch);
+        $curl_info = curl_getinfo($ch);
         curl_close($ch);
+
+        // Log full response details for debugging
+        $this->_log_call_response($lead, $http_code, $curl_err, $curl_info, $response);
 
         if ($curl_err) {
             return ['success' => false, 'error' => 'cURL: ' . $curl_err];
@@ -641,6 +648,107 @@ class Ai_calling extends AdminController
         file_put_contents(
             $file,
             '[' . date('Y-m-d H:i:s') . '] ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n",
+            FILE_APPEND
+        );
+
+        // Additionally log errors to a dedicated error log for easy debugging
+        $ended_reason = $data['message']['endedReason'] ?? $data['endedReason'] ?? null;
+        $call         = $data['message']['call']        ?? $data['call']        ?? [];
+        $call_id      = $call['id']                     ?? 'unknown';
+        $call_status  = $call['status']                 ?? 'unknown';
+        $phone        = $call['customer']['number']     ?? 'unknown';
+
+        if ($ended_reason && (strncmp($ended_reason, 'error-', 6) === 0 || in_array($ended_reason, ['failed', 'busy', 'no-answer']))) {
+            $error_file = $log_dir . 'errors_' . date('Y-m-d') . '.log';
+            $error_data = [
+                'time'          => date('Y-m-d H:i:s'),
+                'call_id'       => $call_id,
+                'phone'         => $phone,
+                'call_status'   => $call_status,
+                'ended_reason'  => $ended_reason,
+                'sip_status'    => $call['telephony']['statusCode']       ?? null,
+                'sip_reason'    => $call['telephony']['statusMessage']    ?? null,
+                'provider'      => $call['phoneNumber']['provider']       ?? null,
+                'trunk_id'      => $call['phoneNumber']['sipTrunkId']     ?? null,
+                'duration_sec'  => $call['duration']                      ?? null,
+                'cost'          => $call['cost']                          ?? null,
+                'started_at'    => $call['startedAt']                     ?? null,
+                'ended_at'      => $call['endedAt']                      ?? null,
+            ];
+            file_put_contents(
+                $error_file,
+                json_encode($error_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n---\n",
+                FILE_APPEND
+            );
+        }
+    }
+
+    /**
+     * Logs an outbound call attempt (request side) for debugging.
+     *
+     * @param  array  $lead     Lead data.
+     * @param  string $phone    Formatted E.164 phone number.
+     * @param  array  $payload  The JSON payload sent to Vapi.
+     * @return void
+     */
+    private function _log_call_attempt(array $lead, string $phone, array $payload): void
+    {
+        $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0755, true);
+        }
+
+        $file = $log_dir . 'call_debug_' . date('Y-m-d') . '.log';
+        $entry = [
+            'time'       => date('Y-m-d H:i:s'),
+            'action'     => 'OUTBOUND_REQUEST',
+            'lead_id'    => $lead['id'],
+            'lead_name'  => $lead['name'],
+            'phone_raw'  => $lead['phonenumber'],
+            'phone_e164' => $phone,
+            'api_url'    => AI_VAPI_API_URL,
+            'phone_id'   => AI_VAPI_PHONE_ID,
+            'assistant'  => AI_VAPI_ASSISTANT_ID,
+        ];
+        file_put_contents(
+            $file,
+            '[REQUEST] ' . json_encode($entry, JSON_UNESCAPED_UNICODE) . "\n",
+            FILE_APPEND
+        );
+    }
+
+    /**
+     * Logs the full Vapi API response for debugging SIP/connection issues.
+     *
+     * @param  array  $lead       Lead data.
+     * @param  int    $http_code  HTTP status code from Vapi.
+     * @param  string $curl_err   cURL error string (empty on success).
+     * @param  array  $curl_info  Full cURL info array (timing, IPs, etc).
+     * @param  string $response   Raw response body from Vapi.
+     * @return void
+     */
+    private function _log_call_response(array $lead, int $http_code, string $curl_err, array $curl_info, string $response): void
+    {
+        $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0755, true);
+        }
+
+        $file = $log_dir . 'call_debug_' . date('Y-m-d') . '.log';
+        $entry = [
+            'time'            => date('Y-m-d H:i:s'),
+            'action'          => 'OUTBOUND_RESPONSE',
+            'lead_id'         => $lead['id'],
+            'http_code'       => $http_code,
+            'curl_error'      => $curl_err ?: null,
+            'connect_time_ms' => round(($curl_info['connect_time'] ?? 0) * 1000),
+            'total_time_ms'   => round(($curl_info['total_time'] ?? 0) * 1000),
+            'primary_ip'      => $curl_info['primary_ip'] ?? null,
+            'response_body'   => json_decode($response, true) ?? $response,
+        ];
+        file_put_contents(
+            $file,
+            '[RESPONSE] ' . json_encode($entry, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n",
             FILE_APPEND
         );
     }
