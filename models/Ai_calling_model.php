@@ -57,8 +57,8 @@ class Ai_calling_model extends App_Model
      *  - `ai_call_status` is 'pending'
      *     OR ('callback_scheduled' AND next_followup_date ≤ today)
      *
-     * Results are ordered by followup_count ASC so first-contact leads are
-     * prioritised over follow-up attempts in the same session.
+     * Results are ordered by id DESC so the most recently added leads are
+     * called first.
      *
      * @param  int   $limit  Max records to return. Defaults to 50 (AI_MAX_CALLS_PER_RUN).
      * @return array         Array of associative arrays, each with keys:
@@ -84,7 +84,7 @@ class Ai_calling_model extends App_Model
             $this->db->group_end();
         $this->db->group_end();
 
-        $this->db->order_by('followup_count', 'ASC');
+        $this->db->order_by('id', 'DESC'); // newest leads first
         $this->db->limit((int) $limit);
 
         return $this->db->get()->result_array();

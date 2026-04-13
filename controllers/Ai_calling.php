@@ -371,6 +371,12 @@ class Ai_calling extends AdminController
                 $this->ai_calling_model->mark_lead_called($lead['id'], $result['call_id']);
                 $stats['called']++;
                 $stats['log'][] = "OK  | {$lead['name']} | {$lead['phonenumber']} | {$result['call_id']}";
+            } elseif (!empty($result['concurrency_blocked'])) {
+                // Vapi has hit its concurrent call cap — abort the session now.
+                // Remaining leads stay pending and will be retried next run.
+                $stats['log'][]     = "STOP| Concurrency limit reached — remaining leads will retry next run";
+                $stats['message']   = $result['error'];
+                break;
             } else {
                 $stats['failed']++;
                 $stats['log'][] = "ERR | {$lead['name']} | {$lead['phonenumber']} | {$result['error']}";
@@ -453,6 +459,16 @@ class Ai_calling extends AdminController
 
         if ($http_code >= 200 && $http_code < 300 && !empty($body['id'])) {
             return ['success' => true, 'call_id' => $body['id']];
+        }
+
+        // Detect Vapi concurrency limit — stop the session immediately so we
+        // don't hammer the API with calls that will all be rejected.
+        if (!empty($body['subscriptionLimits']['concurrencyBlocked'])) {
+            return [
+                'success'             => false,
+                'concurrency_blocked' => true,
+                'error'               => 'Over Concurrency Limit (max ' . ($body['subscriptionLimits']['concurrencyLimit'] ?? '?') . ' simultaneous calls)',
+            ];
         }
 
         $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");

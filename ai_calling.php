@@ -67,7 +67,7 @@ if (file_exists($_vapi_config)) {
 define('AI_VAPI_API_URL', 'https://api.vapi.ai/call/phone');
 
 /** @var int Maximum number of leads to call in a single cron/manual session. */
-define('AI_MAX_CALLS_PER_RUN', 50);
+define('AI_MAX_CALLS_PER_RUN', 2);
 
 /** @var int Seconds to sleep between consecutive Vapi API calls. Prevents rate-limiting. */
 define('AI_CALL_DELAY_SEC', 2);
