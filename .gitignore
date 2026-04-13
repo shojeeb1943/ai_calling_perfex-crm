@@ -1,0 +1,19 @@
+# ─── Credentials & Secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+config.php
+
+# Vapi credentials — copy vapi.example.php → vapi.php and fill in your values
+config/vapi.php
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+
+# ─── OS & IDE ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

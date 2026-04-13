@@ -1,0 +1,292 @@
+<?php defined('BASEPATH') or exit('No direct script access allowed'); ?>
+
+<?php init_head(); ?>
+
+<div id="wrapper">
+    <div class="content">
+        <div class="row">
+            <div class="col-md-12">
+
+                <!-- Page header -->
+                <div class="page-heading">
+                    <h3 class="no-margin">
+                        <i class="fa fa-phone text-success"></i>
+                        AI Calling Dashboard
+                    </h3>
+                    <small class="text-muted">Automated Vapi AI lead calling system</small>
+                </div>
+                <hr class="hr-panel-heading" />
+
+                <!-- ── Stat cards ────────────────────────────────────────── -->
+                <div class="row">
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-warning no-margin"><?php echo $stats['pending']; ?></h2>
+                                <small>Pending Calls</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-primary no-margin"><?php echo $stats['called_today']; ?></h2>
+                                <small>Called Today</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-success no-margin"><?php echo $stats['interested']; ?></h2>
+                                <small>Interested</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-info no-margin"><?php echo $stats['callback']; ?></h2>
+                                <small>Callback Scheduled</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-danger no-margin"><?php echo $stats['not_interested']; ?></h2>
+                                <small>Not Interested</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
+                                <h2 class="text-muted no-margin"><?php echo $stats['total_called']; ?></h2>
+                                <small>Total Called</small>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+                <!-- /stat cards -->
+
+                <!-- ── Manual trigger ───────────────────────────────────── -->
+                <div class="panel panel-default">
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <h4 class="no-margin">Start Calling Session</h4>
+                                <p class="text-muted" style="margin-bottom:0;">
+                                    Calls up to <strong><?php echo AI_MAX_CALLS_PER_RUN; ?></strong> pending leads now via Vapi AI.
+                                    Max <strong><?php echo AI_MAX_FOLLOWUPS; ?></strong> attempts per lead,
+                                    followup in <strong><?php echo AI_FOLLOWUP_DAYS; ?></strong> days.
+                                </p>
+                            </div>
+                            <div class="col-md-4 text-right">
+                                <button id="btn-start-calling" class="btn btn-success btn-lg">
+                                    <i class="fa fa-phone"></i> Start Calling Now
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Result area -->
+                        <div id="calling-result" style="display:none; margin-top:15px;">
+                            <div id="calling-alert" class="alert"></div>
+                            <pre id="calling-log" style="max-height:200px; overflow-y:auto; background:#f5f5f5; padding:10px; border-radius:4px; font-size:12px;"></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Cron / Webhook info ───────────────────────────────── -->
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h4 class="panel-title">Automation Setup</h4>
+                    </div>
+                    <div class="panel-body">
+                        <p><strong>Hostinger Cron URL</strong> (set to run daily at 9:00 AM):</p>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="cron-url"
+                                   value="<?php echo base_url('admin/ai_calling/cron/VapiCron2024Secure'); ?>"
+                                   readonly />
+                            <span class="input-group-btn">
+                                <button class="btn btn-default" onclick="copyCronUrl()">
+                                    <i class="fa fa-copy"></i> Copy
+                                </button>
+                            </span>
+                        </div>
+                        <small class="text-muted">Hostinger → Hosting → Cron Jobs → Add → paste URL → set schedule</small>
+
+                        <hr/>
+
+                        <p><strong>Vapi Webhook URL</strong> (paste in Vapi Dashboard → Assistant → Webhook URL):</p>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="webhook-url"
+                                   value="<?php echo base_url('admin/ai_calling/webhook'); ?>"
+                                   readonly />
+                            <span class="input-group-btn">
+                                <button class="btn btn-default" onclick="copyWebhookUrl()">
+                                    <i class="fa fa-copy"></i> Copy
+                                </button>
+                            </span>
+                        </div>
+                        <small class="text-muted">Vapi will POST call results to this URL after each call ends</small>
+                    </div>
+                </div>
+
+                <!-- ── Recent calls table ────────────────────────────────── -->
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h4 class="panel-title">Recent Calls (Last 20)</h4>
+                    </div>
+                    <div class="panel-body no-padding">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover no-margin">
+                                <thead>
+                                    <tr>
+                                        <th>Lead</th>
+                                        <th>Phone</th>
+                                        <th>Status</th>
+                                        <th>Last Called</th>
+                                        <th>Attempts</th>
+                                        <th>Summary</th>
+                                        <th>Recording</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                <?php if (empty($recent_calls)): ?>
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted">No calls made yet.</td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($recent_calls as $call): ?>
+                                    <tr>
+                                        <td>
+                                            <a href="<?php echo admin_url('leads/index/' . $call['id']); ?>">
+                                                <?php echo htmlspecialchars($call['name']); ?>
+                                            </a>
+                                        </td>
+                                        <td><?php echo htmlspecialchars($call['phonenumber']); ?></td>
+                                        <td>
+                                            <?php
+                                            $status_map = [
+                                                'pending'            => ['label' => 'Pending',          'class' => 'warning'],
+                                                'called'             => ['label' => 'Called',           'class' => 'primary'],
+                                                'interested'         => ['label' => 'Interested',       'class' => 'success'],
+                                                'not_interested'     => ['label' => 'Not Interested',   'class' => 'danger'],
+                                                'callback_scheduled' => ['label' => 'Callback',         'class' => 'info'],
+                                            ];
+                                            $s = $status_map[$call['ai_call_status']] ?? ['label' => ucfirst($call['ai_call_status']), 'class' => 'default'];
+                                            ?>
+                                            <span class="label label-<?php echo $s['class']; ?>">
+                                                <?php echo $s['label']; ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <?php echo $call['last_ai_call']
+                                                ? date('d M Y H:i', strtotime($call['last_ai_call']))
+                                                : '-'; ?>
+                                        </td>
+                                        <td class="text-center"><?php echo (int) $call['followup_count']; ?></td>
+                                        <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                                            title="<?php echo htmlspecialchars($call['ai_call_summary'] ?? ''); ?>">
+                                            <?php echo htmlspecialchars(mb_substr($call['ai_call_summary'] ?? '', 0, 60)) ?: '-'; ?>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($call['call_recording_url'])): ?>
+                                                <a href="<?php echo htmlspecialchars($call['call_recording_url']); ?>"
+                                                   target="_blank" class="btn btn-xs btn-default">
+                                                    <i class="fa fa-play"></i> Play
+                                                </a>
+                                            <?php else: ?>
+                                                <span class="text-muted">-</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <!-- /recent calls -->
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php init_tail(); ?>
+
+<script>
+document.getElementById('btn-start-calling').addEventListener('click', function () {
+    var btn    = this;
+    var result = document.getElementById('calling-result');
+    var alert  = document.getElementById('calling-alert');
+    var log    = document.getElementById('calling-log');
+
+    btn.disabled    = true;
+    btn.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Calling...';
+    result.style.display = 'none';
+
+    fetch('<?php echo admin_url('ai_calling/start_calling'); ?>', {
+        method : 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        result.style.display = 'block';
+
+        if (data.called > 0 || data.total === 0) {
+            alert.className = 'alert alert-success';
+            alert.innerHTML = '<strong>Done!</strong> Called: ' + data.called +
+                              ' | Failed: ' + data.failed +
+                              ' | Total: ' + data.total +
+                              (data.message ? ' — ' + data.message : '');
+        } else {
+            alert.className = 'alert alert-warning';
+            alert.innerHTML = '<strong>Warning:</strong> ' + (data.message || 'Check logs for details.');
+        }
+
+        if (data.log && data.log.length > 0) {
+            log.style.display = 'block';
+            log.textContent   = data.log.join('\n');
+        } else {
+            log.style.display = 'none';
+        }
+
+        // Refresh page after 3s to update stats
+        setTimeout(function () { location.reload(); }, 3000);
+    })
+    .catch(function (err) {
+        result.style.display = 'block';
+        alert.className      = 'alert alert-danger';
+        alert.innerHTML      = '<strong>Error:</strong> ' + err.message;
+    })
+    .finally(function () {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fa fa-phone"></i> Start Calling Now';
+    });
+});
+
+function copyCronUrl() {
+    var el = document.getElementById('cron-url');
+    el.select();
+    document.execCommand('copy');
+    alert('Cron URL copied!');
+}
+
+function copyWebhookUrl() {
+    var el = document.getElementById('webhook-url');
+    el.select();
+    document.execCommand('copy');
+    alert('Webhook URL copied!');
+}
+</script>
