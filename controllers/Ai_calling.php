@@ -107,9 +107,138 @@ class Ai_calling extends AdminController
         echo json_encode(['status' => 'received']);
     }
 
+    // ─── One-time migration: adds missing columns to tblleads ─────────────────
+    // URL: admin/ai_calling/migrate  (GET)
+    public function migrate()
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $columns = [
+            'ai_call_status'     => "VARCHAR(30)  NOT NULL DEFAULT 'pending'",
+            'vapi_call_id'       => "VARCHAR(100) DEFAULT NULL",
+            'last_ai_call'       => "DATETIME     DEFAULT NULL",
+            'next_followup_date' => "DATE         DEFAULT NULL",
+            'followup_count'     => "INT(11)      NOT NULL DEFAULT 0",
+            'ai_context_notes'   => "TEXT         DEFAULT NULL",
+            'ai_call_summary'    => "TEXT         DEFAULT NULL",
+            'call_recording_url' => "VARCHAR(500) DEFAULT NULL",
+        ];
+
+        $added   = [];
+        $skipped = [];
+
+        foreach ($columns as $col => $definition) {
+            $exists = $this->db->query(
+                "SELECT COUNT(*) AS cnt
+                 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME   = 'tblleads'
+                   AND COLUMN_NAME  = ?",
+                [$col]
+            )->row()->cnt;
+
+            if (!$exists) {
+                $this->db->query("ALTER TABLE tblleads ADD COLUMN `{$col}` {$definition}");
+                $added[] = $col;
+            } else {
+                $skipped[] = $col;
+            }
+        }
+
+        echo json_encode([
+            'success' => true,
+            'added'   => $added,
+            'skipped' => $skipped,
+            'message' => count($added) > 0
+                ? 'Migration complete. Added: ' . implode(', ', $added)
+                : 'All columns already exist. No changes needed.',
+        ], JSON_PRETTY_PRINT);
+    }
+
+    // ─── Debug: test one Vapi API call and return raw response ───────────────
+    // URL: admin/ai_calling/test_api  (GET)
+    public function test_api()
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        // Get the first callable lead to test with
+        $leads = $this->ai_calling_model->get_leads_to_call(1);
+
+        if (empty($leads)) {
+            echo json_encode([
+                'success' => false,
+                'message' => 'No pending leads found to test with.',
+            ]);
+            return;
+        }
+
+        $lead  = $leads[0];
+        $phone = $this->_format_phone($lead['phonenumber']);
+
+        $payload = [
+            'phoneNumberId' => AI_VAPI_PHONE_ID,
+            'assistantId'   => AI_VAPI_ASSISTANT_ID,
+            'customer'      => [
+                'number'                 => $phone,
+                'numberE164CheckEnabled' => false,
+            ],
+            'assistantOverrides' => [
+                'variableValues' => [
+                    'leadName' => $lead['name'],
+                    'leadId'   => (string) $lead['id'],
+                    'callTime' => date('Y-m-d H:i:s'),
+                    'context'  => $lead['ai_context_notes'] ?? '',
+                ],
+            ],
+        ];
+
+        $ch = curl_init(AI_VAPI_API_URL);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST  => 'POST',
+            CURLOPT_POSTFIELDS     => json_encode($payload),
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . AI_VAPI_API_KEY,
+            ],
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_SSL_VERIFYPEER => false, // relaxed for test only
+        ]);
+
+        $response  = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_err  = curl_error($ch);
+        $curl_info = curl_getinfo($ch);
+        curl_close($ch);
+
+        echo json_encode([
+            'lead_id'        => $lead['id'],
+            'lead_name'      => $lead['name'],
+            'phone_raw'      => $lead['phonenumber'],
+            'phone_formatted'=> $phone,
+            'payload_sent'   => $payload,
+            'http_code'      => $http_code,
+            'curl_error'     => $curl_err ?: null,
+            'curl_connect_ms'=> round($curl_info['connect_time'] * 1000),
+            'response_body'  => json_decode($response, true) ?? $response,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    }
+
     // ─── Core calling session ─────────────────────────────────────────────────
     private function _run_calling_session()
     {
+        @set_time_limit(0); // prevent PHP timeout on hosting
+
         $stats = [
             'success' => true,
             'total'   => 0,
@@ -176,8 +305,8 @@ class Ai_calling extends AdminController
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . AI_VAPI_API_KEY,
             ],
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_SSL_VERIFYPEER => false,
         ]);
 
         $response  = curl_exec($ch);
