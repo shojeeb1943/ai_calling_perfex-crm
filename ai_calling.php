@@ -16,7 +16,18 @@ define('AI_CALLING_MODULE_PATH',    dirname(__FILE__) . '/');
 
 // Credentials — loaded from config/vapi.php (git-ignored).
 // Copy config/vapi.example.php → config/vapi.php and fill in your values.
-require_once(AI_CALLING_MODULE_PATH . 'config/vapi.php');
+$_vapi_config = AI_CALLING_MODULE_PATH . 'config/vapi.php';
+if (file_exists($_vapi_config)) {
+    require_once($_vapi_config);
+} else {
+    // Define safe defaults so the module doesn't crash the whole CRM.
+    // Fix: upload config/vapi.php with your real credentials.
+    define('AI_VAPI_API_KEY',      '');
+    define('AI_VAPI_PHONE_ID',     '');
+    define('AI_VAPI_ASSISTANT_ID', '');
+    define('AI_CRON_TOKEN',        'change-me');
+    log_message('error', '[ai_calling] config/vapi.php is missing! Copy vapi.example.php → vapi.php');
+}
 
 define('AI_VAPI_API_URL',           'https://api.vapi.ai/call/phone');
 define('AI_MAX_CALLS_PER_RUN',      50);
