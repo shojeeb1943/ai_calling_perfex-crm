@@ -1,73 +1,81 @@
-# AI Calling
-### Perfex CRM Module — Powered by [Vapi](https://vapi.ai)
+<div align="center">
 
-> Automate outbound AI voice calls to your leads. Calls trigger on demand or via cron, and outcomes sync back to Perfex CRM in real time through a webhook.
+# 📞 AI Calling
 
-![Perfex CRM](https://img.shields.io/badge/Perfex%20CRM-2.3+-4A90D9?style=flat-square)
-![PHP](https://img.shields.io/badge/PHP-7.4+-777BB4?style=flat-square&logo=php&logoColor=white)
-![Vapi](https://img.shields.io/badge/Vapi-AI%20Voice-FF6B6B?style=flat-square)
-![License](https://img.shields.io/badge/License-Proprietary-lightgrey?style=flat-square)
+**Perfex CRM Module · Powered by [Vapi](https://vapi.ai)**
+
+*Automate outbound AI voice calls to your leads — fully hands-free.*
+
+<br/>
+
+[![Perfex CRM](https://img.shields.io/badge/Perfex%20CRM-2.3+-4A90D9?style=for-the-badge)](https://perfexcrm.com)
+[![PHP](https://img.shields.io/badge/PHP-7.4+-777BB4?style=for-the-badge&logo=php&logoColor=white)](https://php.net)
+[![Vapi](https://img.shields.io/badge/Vapi-AI%20Voice-FF6B6B?style=for-the-badge)](https://vapi.ai)
+[![License](https://img.shields.io/badge/License-Proprietary-1a1a2e?style=for-the-badge)](.)
+
+</div>
 
 ---
 
-## Overview
+## How It Works
 
 ```
-Lead added to CRM
-       │
-       ▼
- AI Calling Module ──► Vapi API ──► Phone Call
-       │                               │
-       │            Webhook ◄──────────┘
-       ▼
- Lead record updated (status, summary, recording)
+┌─────────────┐     trigger      ┌──────────────────┐     API call     ┌────────────┐
+│  Perfex CRM │ ──────────────►  │  AI Calling Mod  │ ───────────────► │  Vapi API  │
+│   (Leads)   │                  │                  │                  │            │
+└─────────────┘                  └──────────────────┘                  └─────┬──────┘
+       ▲                                  ▲                                  │
+       │         lead updated             │           webhook POST            │
+       └──────────────────────────────────┴───────────────────────────────────┘
 ```
+
+Calls are triggered **manually** from the dashboard or **automatically** via a cron job. When a call ends, Vapi sends a webhook — the module parses the transcript, detects the outcome, and writes the result back to the lead record instantly.
 
 ---
 
 ## Features
 
-| Feature | Description |
-|---|---|
-| Outbound AI Calls | Dispatches voice calls to leads via Vapi with zero manual effort |
-| Smart Lead Filtering | Only calls leads with CRM status `Lead` or `FOLLOWUP CLIENT` |
-| Follow-up Logic | Re-calls unanswered leads up to 3 times, spaced 5 days apart |
-| Outcome Detection | Analyses transcripts for keywords → sets `interested`, `not_interested`, or `callback_scheduled` |
-| Webhook Receiver | Vapi POSTs results after each call; module updates the lead instantly |
-| Dashboard | Live stat cards + recent-calls table with transcript snippets and recording links |
-| Manual Trigger | "Start Calling Now" button for on-demand sessions |
-| Cron Endpoint | Token-protected URL for any scheduler (Hostinger, cPanel, GitHub Actions) |
-| File Logging | Per-day session and webhook logs written to `logs/` |
+<table>
+<tr><td>🤖</td><td><strong>Outbound AI Calls</strong></td><td>Dispatches voice calls to leads via Vapi with zero manual effort</td></tr>
+<tr><td>🎯</td><td><strong>Smart Lead Filtering</strong></td><td>Only calls leads with CRM status <code>Lead</code> or <code>FOLLOWUP CLIENT</code></td></tr>
+<tr><td>🔁</td><td><strong>Follow-up Logic</strong></td><td>Re-calls unanswered leads up to 3 times, spaced 5 days apart</td></tr>
+<tr><td>🧠</td><td><strong>Outcome Detection</strong></td><td>Analyses transcripts → sets <code>interested</code>, <code>not_interested</code>, or <code>callback_scheduled</code></td></tr>
+<tr><td>🪝</td><td><strong>Webhook Receiver</strong></td><td>Vapi POSTs results after each call; lead record updates instantly</td></tr>
+<tr><td>📊</td><td><strong>Dashboard</strong></td><td>Live stat cards + recent-calls table with transcript snippets and recordings</td></tr>
+<tr><td>▶️</td><td><strong>Manual Trigger</strong></td><td>"Start Calling Now" button for on-demand sessions</td></tr>
+<tr><td>⏰</td><td><strong>Cron Endpoint</strong></td><td>Token-protected URL for any scheduler — Hostinger, cPanel, GitHub Actions</td></tr>
+<tr><td>📝</td><td><strong>File Logging</strong></td><td>Per-day session and webhook logs written to <code>logs/</code></td></tr>
+</table>
 
 ---
 
 ## Requirements
 
-| Requirement | Version / Notes |
-|---|---|
-| Perfex CRM | 2.3 or later |
-| PHP | 7.4+ |
-| PHP extensions | `curl`, `json` |
-| Vapi account | API key · Phone Number ID · Assistant ID — [vapi.ai](https://vapi.ai) |
+| | Requirement | Notes |
+|---|---|---|
+| 🖥️ | **Perfex CRM** | Version 2.3 or later |
+| 🐘 | **PHP** | 7.4+ with `curl` and `json` extensions |
+| 🔊 | **Vapi Account** | API key · Phone Number ID · Assistant ID — [vapi.ai](https://vapi.ai) |
 
 ---
 
-## Installation
+## Quick Start
 
-### 1 — Copy the module
+### `1` &nbsp; Copy the module
 
 ```bash
 cp -r ai_calling/ perfex_crm/modules/ai_calling/
 ```
 
-### 2 — Activate in Perfex CRM
+### `2` &nbsp; Activate in Perfex CRM
 
-Go to **Setup → Modules**, find **AI Calling**, and click **Activate**.
-The `logs/` directory is created automatically on activation.
+**Setup → Modules → AI Calling → Activate**
 
-### 3 — Add your Vapi credentials
+> The `logs/` directory is created automatically on activation.
 
-Open `ai_calling.php` and replace the placeholder constants:
+### `3` &nbsp; Add Vapi credentials
+
+Open `ai_calling.php` and fill in your keys:
 
 ```php
 define('AI_VAPI_API_KEY',      'your-vapi-api-key');
@@ -75,9 +83,9 @@ define('AI_VAPI_PHONE_ID',     'your-vapi-phone-number-id');
 define('AI_VAPI_ASSISTANT_ID', 'your-vapi-assistant-id');
 ```
 
-### 4 — Run the database migration
+### `4` &nbsp; Run the database migration
 
-Execute once against your Perfex CRM database:
+Execute this **once** against your Perfex CRM database:
 
 ```sql
 ALTER TABLE tblleads
@@ -95,36 +103,44 @@ ALTER TABLE tblleads
 
 ## Configuration
 
-All tuneable settings live as constants at the top of `ai_calling.php`:
+All settings are constants at the top of `ai_calling.php`:
 
 | Constant | Default | Description |
 |---|---|---|
 | `AI_VAPI_API_KEY` | — | Your Vapi API key |
-| `AI_VAPI_PHONE_ID` | — | Vapi phone number ID to call from |
-| `AI_VAPI_ASSISTANT_ID` | — | Vapi assistant to use for calls |
-| `AI_CRON_TOKEN` | `VapiCron2024Secure` | Secret token for the cron URL — **change this** |
-| `AI_MAX_CALLS_PER_RUN` | `50` | Max leads called in a single session |
-| `AI_CALL_DELAY_SEC` | `2` | Seconds to wait between each call |
-| `AI_FOLLOWUP_DAYS` | `5` | Days before a follow-up call is scheduled |
-| `AI_MAX_FOLLOWUPS` | `3` | Max total call attempts per lead |
+| `AI_VAPI_PHONE_ID` | — | Phone number ID to call from |
+| `AI_VAPI_ASSISTANT_ID` | — | Assistant to use for calls |
+| `AI_CRON_TOKEN` | `VapiCron2024Secure` | ⚠️ Secret token for the cron URL — **change this** |
+| `AI_MAX_CALLS_PER_RUN` | `50` | Max leads called per session |
+| `AI_CALL_DELAY_SEC` | `2` | Seconds between each call |
+| `AI_FOLLOWUP_DAYS` | `5` | Days before a follow-up is scheduled |
+| `AI_MAX_FOLLOWUPS` | `3` | Max call attempts per lead |
 
 ---
 
-## Automation Setup
+## Automation
 
-### Cron Job
+<details>
+<summary><strong>⏰ Cron Job (Hostinger / cPanel / any host)</strong></summary>
 
-Copy the cron URL from the dashboard and schedule it daily:
+<br/>
+
+Copy the cron URL from the dashboard:
 
 ```
 https://yourdomain.com/admin/ai_calling/cron/YOUR_CRON_TOKEN
 ```
 
-**Hostinger:** Hosting → Cron Jobs → Add → paste URL → set to daily at 09:00
+**Hostinger:** Hosting → Cron Jobs → Add → paste URL → daily at 09:00
 
-### Vapi Webhook
+</details>
 
-Paste the webhook URL into your Vapi assistant settings:
+<details>
+<summary><strong>🪝 Vapi Webhook</strong></summary>
+
+<br/>
+
+Copy the webhook URL from the dashboard:
 
 ```
 https://yourdomain.com/admin/ai_calling/webhook
@@ -132,42 +148,51 @@ https://yourdomain.com/admin/ai_calling/webhook
 
 **Vapi:** Dashboard → Assistant → Webhook URL → Save
 
+Vapi will POST call results to this endpoint after every call ends.
+
+</details>
+
 ---
 
-## How It Works
+## How Leads Are Selected
 
-### Lead Selection
+A lead is called when it meets **all** of these criteria:
 
-A lead is called when it meets **all** of the following:
+```
+✔  CRM status is "Lead"  OR  "FOLLOWUP CLIENT"
+✔  phonenumber is not empty
+✔  followup_count < AI_MAX_FOLLOWUPS (default 3)
+✔  ai_call_status is "pending"
+   OR  "callback_scheduled" with next_followup_date ≤ today
+```
 
-- CRM `status` is `Lead` **or** `FOLLOWUP CLIENT`
-- `phonenumber` is not empty
-- `followup_count` < `AI_MAX_FOLLOWUPS`
-- `ai_call_status` is `pending` — **or** `callback_scheduled` with `next_followup_date` today or earlier
+> Leads are ordered by `followup_count ASC` — fresher leads are called first.
 
-Leads are ordered by `followup_count ASC` so fresher leads are called first.
+---
 
-### Outcome Detection
+## Outcome Detection
 
-After each call, Vapi sends the transcript. The module maps keywords to statuses:
+After each call Vapi sends the full transcript. The module matches keywords and sets the lead's AI status:
 
-| Transcript contains | Status set |
+| Transcript signal | Status |
 |---|---|
-| `interested` (without `not`) | `interested` |
+| `interested` *(without "not")* | `interested` |
 | `not interested` / `no interest` | `not_interested` |
 | `callback` / `call back` / `call me later` | `callback_scheduled` |
 | *(no match)* | `called` |
 
-### Phone Number Formatting
+---
 
-Numbers are normalised to E.164 format automatically:
+## Phone Number Formatting
 
-| Input | Output |
+Numbers are auto-normalised to E.164 before calling:
+
+| Input format | Output |
 |---|---|
-| `01XXXXXXXXX` (11 digits) | `+8801XXXXXXXXX` |
-| `1XXXXXXXXX` (10 digits) | `+8801XXXXXXXXX` |
-| `880XXXXXXXXXX` (no `+`) | `+880XXXXXXXXXX` |
-| Anything else | `+` prepended |
+| `01XXXXXXXXX` — 11 digits | `+8801XXXXXXXXX` |
+| `1XXXXXXXXX` — 10 digits, no leading 0 | `+8801XXXXXXXXX` |
+| `880XXXXXXXXXX` — no `+` prefix | `+880XXXXXXXXXX` |
+| Anything else | `+` prepended as-is |
 
 ---
 
@@ -175,18 +200,18 @@ Numbers are normalised to E.164 format automatically:
 
 Navigate to **AI Calling** in the Perfex CRM sidebar.
 
-**Stat cards**
+**Stat Cards**
 
-| Card | What it shows |
+| Card | Description |
 |---|---|
-| Pending Calls | Leads with `Lead` / `FOLLOWUP CLIENT` status not yet called |
-| Called Today | Leads called in the current calendar day |
-| Interested | Leads where the AI detected interest |
-| Callback Scheduled | Leads that requested a call back |
-| Not Interested | Leads that declined |
-| Total Called | All leads ever contacted |
+| 🕐 Pending Calls | `Lead` / `FOLLOWUP CLIENT` leads not yet called |
+| 📅 Called Today | Leads called in the current calendar day |
+| ✅ Interested | AI detected interest |
+| 🔁 Callback Scheduled | Lead asked to be called back |
+| ❌ Not Interested | Lead declined |
+| 📞 Total Called | All leads ever contacted |
 
-**Recent Calls table** — last 20 calls with name, phone, status badge, timestamp, attempt count, transcript snippet, and recording playback link.
+**Recent Calls table** — last 20 calls with name, phone, status badge, timestamp, attempt count, transcript snippet, and a recording playback link.
 
 ---
 
@@ -194,14 +219,14 @@ Navigate to **AI Calling** in the Perfex CRM sidebar.
 
 ```
 ai_calling/
-├── ai_calling.php                   # Entry point — constants, hooks, menu registration
-├── install.php                      # Activation hook — creates logs/ directory
+├── ai_calling.php                   # Entry point — constants, hooks, menu
+├── install.php                      # Activation hook — creates logs/
 │
 ├── controllers/
-│   └── Ai_calling.php               # Dashboard · cron · webhook · calling session
+│   └── Ai_calling.php               # Dashboard · cron · webhook · session logic
 │
 ├── models/
-│   └── Ai_calling_model.php         # All database queries
+│   └── Ai_calling_model.php         # All DB queries
 │
 ├── views/
 │   └── manage.php                   # Dashboard UI
@@ -210,7 +235,7 @@ ai_calling/
 │   └── english/
 │       └── ai_calling_lang.php      # Language strings
 │
-└── logs/                            # Auto-created on activation (git-ignored)
+└── logs/                            # Auto-created on activation · git-ignored
     ├── session_YYYY-MM-DD.log       # Per-day call session logs
     └── webhook_YYYY-MM-DD.log       # Raw Vapi webhook payloads
 ```
@@ -221,10 +246,12 @@ ai_calling/
 
 The module registers a single `view` capability under the **AI Calling** group.
 
-Go to **Setup → Roles** to grant or restrict access per staff role.
+**Setup → Roles** — grant or restrict access per staff role.
 
 ---
 
-## Author
+<div align="center">
 
-**Bytesis Ltd**
+Built by **Bytesis Ltd**
+
+</div>

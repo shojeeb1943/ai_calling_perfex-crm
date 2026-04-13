@@ -237,7 +237,7 @@ document.getElementById('btn-start-calling').addEventListener('click', function 
     result.style.display = 'none';
 
     var csrfData = new FormData();
-    csrfData.append(csrf_token_name, csrf_token_value);
+    csrfData.append('<?php echo $this->security->get_csrf_token_name(); ?>', '<?php echo $this->security->get_csrf_hash(); ?>');
 
     fetch('<?php echo admin_url('ai_calling/start_calling'); ?>', {
         method : 'POST',

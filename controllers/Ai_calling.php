@@ -1,17 +1,51 @@
 <?php
+/**
+ * @file        controllers/Ai_calling.php
+ * @package     Perfex CRM — AI Calling Module
+ *
+ * Main controller. Handles every HTTP request routed to this module:
+ *
+ *  GET  admin/ai_calling                        → index()         Dashboard
+ *  POST admin/ai_calling/start_calling          → start_calling() Manual trigger (AJAX)
+ *  GET  admin/ai_calling/cron/{token}           → cron()          Scheduler endpoint
+ *  POST admin/ai_calling/webhook                → webhook()       Vapi callback receiver
+ *  GET  admin/ai_calling/migrate                → migrate()       One-time DB migration
+ *  GET  admin/ai_calling/test_api               → test_api()      Debug helper
+ *
+ * All staff-facing actions require the `view` capability registered by the
+ * module. The webhook action intentionally has no CSRF protection (excluded in
+ * ai_calling.php) because Vapi posts from external servers.
+ */
+
 defined('BASEPATH') or exit('No direct script access allowed');
 
 class Ai_calling extends AdminController
 {
+    // ─── Bootstrap ────────────────────────────────────────────────────────────
+
+    /**
+     * Loads the model on construction.
+     *
+     * The model is accessed via `$this->ai_calling_model` throughout this class.
+     */
     public function __construct()
     {
         parent::__construct();
         $this->load->model('ai_calling/ai_calling_model');
     }
 
-    // ─── Dashboard ────────────────────────────────────────────────────────────
-    // URL: admin/ai_calling
-    public function index()
+    // ─── Public endpoints ─────────────────────────────────────────────────────
+
+    /**
+     * Renders the AI Calling dashboard.
+     *
+     * Displays six stat cards (pending, called today, interested, callback,
+     * not-interested, total) and a table of the 20 most recent calls.
+     *
+     * @route  GET admin/ai_calling
+     * @return void  Renders ai_calling/manage view.
+     */
+    public function index(): void
     {
         if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
             access_denied(AI_CALLING_MODULE_NAME);
@@ -21,13 +55,20 @@ class Ai_calling extends AdminController
         $data['recent_calls'] = $this->ai_calling_model->get_recent_calls(20);
         $data['title']        = _l('ai_calling_dashboard');
 
-        // Views in modules must be loaded as 'module_name/view_name'
         $this->load->view('ai_calling/manage', $data);
     }
 
-    // ─── Manual trigger from dashboard button (AJAX) ──────────────────────────
-    // URL: admin/ai_calling/start_calling  (POST)
-    public function start_calling()
+    /**
+     * Triggers a calling session on demand and returns JSON.
+     *
+     * Called via AJAX from the "Start Calling Now" button on the dashboard.
+     * Runs the same session logic as the cron endpoint but responds with JSON
+     * so the dashboard can show progress without a full page reload.
+     *
+     * @route  POST admin/ai_calling/start_calling
+     * @return void  Outputs JSON: { success, total, called, failed, log[] }
+     */
+    public function start_calling(): void
     {
         header('Content-Type: application/json');
 
@@ -40,9 +81,18 @@ class Ai_calling extends AdminController
         echo json_encode($result);
     }
 
-    // ─── Cron endpoint (called by Hostinger cron job) ─────────────────────────
-    // URL: admin/ai_calling/cron/VapiCron2024Secure
-    public function cron($token = '')
+    /**
+     * Token-authenticated endpoint for scheduled cron jobs.
+     *
+     * The token in the URL must match AI_CRON_TOKEN; requests with a wrong or
+     * missing token are rejected with HTTP 403. On success the session report
+     * is written as plain text — suitable for Hostinger's cron job output log.
+     *
+     * @route  GET admin/ai_calling/cron/{token}
+     * @param  string $token  Secret token from AI_CRON_TOKEN constant.
+     * @return void           Outputs plain-text session report or dies with 403.
+     */
+    public function cron(string $token = ''): void
     {
         if ($token !== AI_CRON_TOKEN) {
             http_response_code(403);
@@ -61,9 +111,30 @@ class Ai_calling extends AdminController
         }
     }
 
-    // ─── Vapi webhook receiver ────────────────────────────────────────────────
-    // URL: admin/ai_calling/webhook  (POST from Vapi dashboard settings)
-    public function webhook()
+    /**
+     * Receives and processes call-outcome webhooks from Vapi.
+     *
+     * Vapi POST this endpoint after every call ends. The payload is raw JSON
+     * and may arrive in two different shapes (nested under `message` or flat at
+     * root level); both are handled via null-coalescing.
+     *
+     * Processing steps:
+     *  1. Decode and validate the raw JSON body.
+     *  2. Append the full payload to the daily webhook log file.
+     *  3. Extract the Vapi call ID, transcript, and recording URL.
+     *  4. Detect the call outcome by scanning the transcript for keywords.
+     *  5. Update the matching lead record via vapi_call_id.
+     *
+     * Outcome detection priority (first match wins):
+     *  - "interested" (without "not") → interested
+     *  - "not interested" / "no interest" → not_interested
+     *  - "callback" / "call back" / "call me later" → callback_scheduled
+     *  - (no match) → called
+     *
+     * @route  POST admin/ai_calling/webhook  (CSRF-excluded)
+     * @return void  Outputs HTTP 200 + JSON { status: "received" }, or 400 on invalid payload.
+     */
+    public function webhook(): void
     {
         $raw  = file_get_contents('php://input');
         $data = json_decode($raw, true);
@@ -73,32 +144,34 @@ class Ai_calling extends AdminController
             die('Invalid payload');
         }
 
-        // Log every webhook for debugging
         $this->_log_webhook($data);
 
-        // Vapi sends different event shapes; handle both
-        $type        = $data['message']['type']           ?? $data['type']           ?? null;
-        $call        = $data['message']['call']           ?? $data['call']           ?? [];
-        $call_id     = $call['id']                        ?? null;
-        $transcript  = $data['message']['transcript']     ?? $data['transcript']     ?? '';
-        $recording   = $data['message']['recordingUrl']   ?? $call['recordingUrl']   ?? null;
+        // Vapi sends different event shapes; handle both nested and flat layouts.
+        $call       = $data['message']['call']         ?? $data['call']         ?? [];
+        $call_id    = $call['id']                      ?? null;
+        $transcript = $data['message']['transcript']   ?? $data['transcript']   ?? '';
+        $recording  = $data['message']['recordingUrl'] ?? $call['recordingUrl'] ?? null;
 
         if ($call_id) {
-            // Detect outcome from transcript keywords
-            $status = 'called'; // default after call ends
+            $status = 'called'; // default when a call ends with no clear signal
             $lower  = strtolower($transcript);
+
             if (strpos($lower, 'interested') !== false && strpos($lower, 'not interested') === false) {
                 $status = 'interested';
             } elseif (strpos($lower, 'not interested') !== false || strpos($lower, 'no interest') !== false) {
                 $status = 'not_interested';
-            } elseif (strpos($lower, 'callback') !== false || strpos($lower, 'call back') !== false || strpos($lower, 'call me later') !== false) {
+            } elseif (
+                strpos($lower, 'callback') !== false
+                || strpos($lower, 'call back') !== false
+                || strpos($lower, 'call me later') !== false
+            ) {
                 $status = 'callback_scheduled';
             }
 
             $this->ai_calling_model->update_lead_from_webhook($call_id, [
-                'ai_call_status'    => $status,
-                'ai_call_summary'   => mb_substr($transcript, 0, 1000),
-                'call_recording_url'=> $recording,
+                'ai_call_status'     => $status,
+                'ai_call_summary'    => mb_substr($transcript, 0, 1000),
+                'call_recording_url' => $recording,
             ]);
         }
 
@@ -107,9 +180,17 @@ class Ai_calling extends AdminController
         echo json_encode(['status' => 'received']);
     }
 
-    // ─── One-time migration: adds missing columns to tblleads ─────────────────
-    // URL: admin/ai_calling/migrate  (GET)
-    public function migrate()
+    /**
+     * Idempotent migration that adds any missing AI Calling columns to tblleads.
+     *
+     * Safe to run multiple times — existing columns are detected via
+     * information_schema and skipped. Use this if install.php failed silently
+     * or if the module is being upgraded on an existing installation.
+     *
+     * @route  GET admin/ai_calling/migrate
+     * @return void  Outputs JSON: { success, added[], skipped[], message }
+     */
+    public function migrate(): void
     {
         header('Content-Type: application/json');
 
@@ -160,9 +241,19 @@ class Ai_calling extends AdminController
         ], JSON_PRETTY_PRINT);
     }
 
-    // ─── Debug: test one Vapi API call and return raw response ───────────────
-    // URL: admin/ai_calling/test_api  (GET)
-    public function test_api()
+    /**
+     * Debug helper — initiates a live Vapi API call against the first callable lead.
+     *
+     * Returns the full request payload, HTTP response code, cURL timing, and
+     * Vapi's raw response body. Useful for verifying credentials and phone number
+     * formatting before enabling the scheduled cron job.
+     *
+     * WARNING: This triggers a real phone call. Use with caution in production.
+     *
+     * @route  GET admin/ai_calling/test_api
+     * @return void  Outputs pretty-printed JSON with call diagnostics.
+     */
+    public function test_api(): void
     {
         header('Content-Type: application/json');
 
@@ -171,14 +262,10 @@ class Ai_calling extends AdminController
             return;
         }
 
-        // Get the first callable lead to test with
         $leads = $this->ai_calling_model->get_leads_to_call(1);
 
         if (empty($leads)) {
-            echo json_encode([
-                'success' => false,
-                'message' => 'No pending leads found to test with.',
-            ]);
+            echo json_encode(['success' => false, 'message' => 'No pending leads found to test with.']);
             return;
         }
 
@@ -212,7 +299,7 @@ class Ai_calling extends AdminController
                 'Authorization: Bearer ' . AI_VAPI_API_KEY,
             ],
             CURLOPT_TIMEOUT        => 30,
-            CURLOPT_SSL_VERIFYPEER => false, // relaxed for test only
+            CURLOPT_SSL_VERIFYPEER => false,
         ]);
 
         $response  = curl_exec($ch);
@@ -222,22 +309,44 @@ class Ai_calling extends AdminController
         curl_close($ch);
 
         echo json_encode([
-            'lead_id'        => $lead['id'],
-            'lead_name'      => $lead['name'],
-            'phone_raw'      => $lead['phonenumber'],
-            'phone_formatted'=> $phone,
-            'payload_sent'   => $payload,
-            'http_code'      => $http_code,
-            'curl_error'     => $curl_err ?: null,
-            'curl_connect_ms'=> round($curl_info['connect_time'] * 1000),
-            'response_body'  => json_decode($response, true) ?? $response,
+            'lead_id'         => $lead['id'],
+            'lead_name'       => $lead['name'],
+            'phone_raw'       => $lead['phonenumber'],
+            'phone_formatted' => $phone,
+            'payload_sent'    => $payload,
+            'http_code'       => $http_code,
+            'curl_error'      => $curl_err ?: null,
+            'curl_connect_ms' => round($curl_info['connect_time'] * 1000),
+            'response_body'   => json_decode($response, true) ?? $response,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     }
 
-    // ─── Core calling session ─────────────────────────────────────────────────
-    private function _run_calling_session()
+    // ─── Private helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Fetches callable leads and dispatches a Vapi call for each one.
+     *
+     * This is the core session logic shared by both start_calling() (manual)
+     * and cron() (automated). It:
+     *  1. Removes the PHP time limit to prevent timeout on large batches.
+     *  2. Queries up to AI_MAX_CALLS_PER_RUN leads from the model.
+     *  3. Calls each lead via _call_lead() and marks successes in the DB.
+     *  4. Sleeps AI_CALL_DELAY_SEC between calls to avoid Vapi rate limits.
+     *  5. Writes a summary entry to the daily session log file.
+     *
+     * @return array {
+     *     bool   $success  Always true (individual failures are counted, not thrown).
+     *     int    $total    Number of leads fetched.
+     *     int    $called   Number of calls successfully dispatched.
+     *     int    $failed   Number of calls that returned an error.
+     *     string $message  Optional human-readable note (e.g. "No pending leads").
+     *     array  $log      Per-lead result lines: "OK  | Name | Phone | call_id"
+     *                                         or  "ERR | Name | Phone | error".
+     * }
+     */
+    private function _run_calling_session(): array
     {
-        @set_time_limit(0); // prevent PHP timeout on hosting
+        @set_time_limit(0); // prevent PHP timeout on shared hosting
 
         $stats = [
             'success' => true,
@@ -247,7 +356,7 @@ class Ai_calling extends AdminController
             'log'     => [],
         ];
 
-        $leads         = $this->ai_calling_model->get_leads_to_call(AI_MAX_CALLS_PER_RUN);
+        $leads          = $this->ai_calling_model->get_leads_to_call(AI_MAX_CALLS_PER_RUN);
         $stats['total'] = count($leads);
 
         if (empty($leads)) {
@@ -274,8 +383,30 @@ class Ai_calling extends AdminController
         return $stats;
     }
 
-    // ─── Single lead call via Vapi ────────────────────────────────────────────
-    private function _call_lead($lead)
+    /**
+     * Sends a single outbound call request to the Vapi API.
+     *
+     * Builds the JSON payload with the lead's E.164 phone number and variable
+     * values that the Vapi assistant can reference during the conversation
+     * (leadName, leadId, callTime, context).
+     *
+     * The call is considered successful when Vapi returns HTTP 2xx AND the
+     * response body contains an `id` field (the Vapi call UUID). Any cURL
+     * error, non-2xx status, or missing `id` is treated as failure.
+     *
+     * @param  array $lead {
+     *     int    $id               Lead's primary key in tblleads.
+     *     string $name             Lead's full name passed to the assistant.
+     *     string $phonenumber      Raw phone number (formatted by _format_phone).
+     *     string $ai_context_notes Optional context injected into the assistant prompt.
+     * }
+     * @return array {
+     *     bool   $success  true on success, false on any error.
+     *     string $call_id  Vapi call UUID (present only on success).
+     *     string $error    Human-readable error message (present only on failure).
+     * }
+     */
+    private function _call_lead(array $lead): array
     {
         $phone = $this->_format_phone($lead['phonenumber']);
 
@@ -324,35 +455,63 @@ class Ai_calling extends AdminController
             return ['success' => true, 'call_id' => $body['id']];
         }
 
-        $err = $body['message'] ?? $body['error'] ?? ("HTTP " . $http_code . ": " . $response);
+        $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
         return ['success' => false, 'error' => $err];
     }
 
-    // ─── Phone number formatter (Bangladesh) ──────────────────────────────────
-    private function _format_phone($raw)
+    /**
+     * Normalises a raw phone number to E.164 format for the Vapi API.
+     *
+     * Handles the four common Bangladesh number formats stored in Perfex CRM:
+     *
+     *  01XXXXXXXXX  (11 digits, leading 0)   →  +8801XXXXXXXXX
+     *  1XXXXXXXXX   (10 digits, no leading 0) →  +8801XXXXXXXXX
+     *  880XXXXXXXXXX (country code, no +)     →  +880XXXXXXXXXX
+     *  Anything else                          →  + prepended as-is
+     *
+     * Non-digit characters (spaces, dashes, parentheses) are stripped before
+     * any matching. The leading `+` is preserved if already present.
+     *
+     * @param  string $raw  Phone number as stored in tblleads.phonenumber.
+     * @return string       E.164-formatted phone number (e.g. "+8801XXXXXXXXX").
+     */
+    private function _format_phone(string $raw): string
     {
-        // Strip everything except digits and leading +
         $phone = preg_replace('/[^0-9]/', '', $raw);
 
-        if (strlen($phone) === 11 && substr($phone, 0, 1) === '0') {
+        if (strlen($phone) === 11 && $phone[0] === '0') {
             // 01XXXXXXXXX → +8801XXXXXXXXX
-            $phone = '+880' . substr($phone, 1);
-        } elseif (strlen($phone) === 10 && substr($phone, 0, 1) !== '0') {
-            // 1XXXXXXXXX → +8801XXXXXXXXX (already without leading 0)
-            $phone = '+880' . $phone;
-        } elseif (substr($phone, 0, 3) === '880') {
-            // 880XXXXXXXXXX → +880XXXXXXXXXX
-            $phone = '+' . $phone;
-        } else {
-            // Fallback: prepend + if not present
-            $phone = '+' . $phone;
+            return '+880' . substr($phone, 1);
         }
 
-        return $phone;
+        if (strlen($phone) === 10 && $phone[0] !== '0') {
+            // 1XXXXXXXXX → +8801XXXXXXXXX (no leading zero stored)
+            return '+880' . $phone;
+        }
+
+        if (substr($phone, 0, 3) === '880') {
+            // 880XXXXXXXXXX → +880XXXXXXXXXX
+            return '+' . $phone;
+        }
+
+        // Fallback: prepend + and hope for the best
+        return '+' . $phone;
     }
 
-    // ─── File logger ──────────────────────────────────────────────────────────
-    private function _log_session($stats)
+    /**
+     * Appends a session summary entry to the daily session log file.
+     *
+     * Log files are written to  module/ai_calling/logs/session_YYYY-MM-DD.log
+     * and are appended to (not overwritten) so multiple sessions per day are
+     * preserved. The logs/ directory is created if it does not exist.
+     *
+     * Each entry contains a timestamp, total/called/failed counts, and one
+     * line per lead showing "OK" or "ERR" with name, phone, and call ID / error.
+     *
+     * @param  array $stats  Session stats array as returned by _run_calling_session().
+     * @return void
+     */
+    private function _log_session(array $stats): void
     {
         $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
         if (!is_dir($log_dir)) {
@@ -373,7 +532,17 @@ class Ai_calling extends AdminController
         file_put_contents($file, implode("\n", $lines) . "\n", FILE_APPEND);
     }
 
-    private function _log_webhook($data)
+    /**
+     * Appends a raw webhook payload to the daily webhook log file.
+     *
+     * Log files are written to  module/ai_calling/logs/webhook_YYYY-MM-DD.log
+     * one JSON blob per line (JSON Lines format), prefixed with a timestamp.
+     * Useful for debugging unexpected Vapi payload shapes or missed updates.
+     *
+     * @param  array $data  Decoded webhook payload from Vapi.
+     * @return void
+     */
+    private function _log_webhook(array $data): void
     {
         $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
         if (!is_dir($log_dir)) {
