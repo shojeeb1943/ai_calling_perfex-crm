@@ -68,6 +68,15 @@
                     <div class="col-md-2 col-sm-4 col-xs-6">
                         <div class="panel panel-default">
                             <div class="panel-body text-center">
+                                <h2 class="text-danger no-margin"><?php echo $stats['failed']; ?></h2>
+                                <small>Failed (will retry)</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 col-sm-4 col-xs-6">
+                        <div class="panel panel-default">
+                            <div class="panel-body text-center">
                                 <h2 class="text-muted no-margin"><?php echo $stats['total_called']; ?></h2>
                                 <small>Total Called</small>
                             </div>
@@ -181,6 +190,7 @@
                                                 'interested'         => ['label' => 'Interested',       'class' => 'success'],
                                                 'not_interested'     => ['label' => 'Not Interested',   'class' => 'danger'],
                                                 'callback_scheduled' => ['label' => 'Callback',         'class' => 'info'],
+                                                'failed'             => ['label' => 'Failed',           'class' => 'danger'],
                                             ];
                                             $s = $status_map[$call['ai_call_status']] ?? ['label' => ucfirst($call['ai_call_status']), 'class' => 'default'];
                                             ?>

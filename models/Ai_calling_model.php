@@ -75,9 +75,10 @@ class Ai_calling_model extends App_Model
         $this->db->where('phonenumber IS NOT NULL', null, false);
         $this->db->where('followup_count <', AI_MAX_FOLLOWUPS);
 
-        // pending OR (callback due today or earlier)
+        // pending OR failed (retry) OR (callback due today or earlier)
         $this->db->group_start();
             $this->db->where('ai_call_status', 'pending');
+            $this->db->or_where('ai_call_status', 'failed');
             $this->db->or_group_start();
                 $this->db->where('ai_call_status', 'callback_scheduled');
                 $this->db->where('next_followup_date <=', $today);
@@ -147,6 +148,7 @@ class Ai_calling_model extends App_Model
             'interested'     => $this->db->where('ai_call_status', 'interested')->get('tblleads')->num_rows(),
             'callback'       => $this->db->where('ai_call_status', 'callback_scheduled')->get('tblleads')->num_rows(),
             'not_interested' => $this->db->where('ai_call_status', 'not_interested')->get('tblleads')->num_rows(),
+            'failed'         => $this->db->where('ai_call_status', 'failed')->get('tblleads')->num_rows(),
             'total_called'   => $this->db->where('last_ai_call IS NOT NULL', null, false)->get('tblleads')->num_rows(),
         ];
     }

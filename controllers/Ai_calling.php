@@ -147,32 +147,52 @@ class Ai_calling extends AdminController
         $this->_log_webhook($data);
 
         // Vapi sends different event shapes; handle both nested and flat layouts.
-        $call       = $data['message']['call']         ?? $data['call']         ?? [];
-        $call_id    = $call['id']                      ?? null;
-        $transcript = $data['message']['transcript']   ?? $data['transcript']   ?? '';
-        $recording  = $data['message']['recordingUrl'] ?? $call['recordingUrl'] ?? null;
+        $call         = $data['message']['call']          ?? $data['call']          ?? [];
+        $call_id      = $call['id']                       ?? null;
+        $transcript   = $data['message']['transcript']    ?? $data['transcript']    ?? '';
+        $recording    = $data['message']['recordingUrl']  ?? $call['recordingUrl']  ?? null;
+        $ended_reason = $data['message']['endedReason']   ?? $data['endedReason']   ?? null;
+
+        // Vapi endedReason values that mean the human was never reached.
+        $failed_reasons = [
+            'customer-did-not-answer',
+            'no-answer',
+            'busy',
+            'voicemail',
+            'failed',
+            'error',
+        ];
 
         if ($call_id) {
-            $status = 'called'; // default when a call ends with no clear signal
-            $lower  = strtolower($transcript);
+            if ($ended_reason && in_array($ended_reason, $failed_reasons, true)) {
+                // Call was dispatched but the human was never reached — mark as
+                // failed so the lead is retried in the next calling session.
+                $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                    'ai_call_status'  => 'failed',
+                    'ai_call_summary' => 'Call failed: ' . $ended_reason,
+                ]);
+            } else {
+                $status = 'called'; // default when a call ends with no clear signal
+                $lower  = strtolower($transcript);
 
-            if (strpos($lower, 'interested') !== false && strpos($lower, 'not interested') === false) {
-                $status = 'interested';
-            } elseif (strpos($lower, 'not interested') !== false || strpos($lower, 'no interest') !== false) {
-                $status = 'not_interested';
-            } elseif (
-                strpos($lower, 'callback') !== false
-                || strpos($lower, 'call back') !== false
-                || strpos($lower, 'call me later') !== false
-            ) {
-                $status = 'callback_scheduled';
+                if (strpos($lower, 'interested') !== false && strpos($lower, 'not interested') === false) {
+                    $status = 'interested';
+                } elseif (strpos($lower, 'not interested') !== false || strpos($lower, 'no interest') !== false) {
+                    $status = 'not_interested';
+                } elseif (
+                    strpos($lower, 'callback') !== false
+                    || strpos($lower, 'call back') !== false
+                    || strpos($lower, 'call me later') !== false
+                ) {
+                    $status = 'callback_scheduled';
+                }
+
+                $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                    'ai_call_status'     => $status,
+                    'ai_call_summary'    => mb_substr($transcript, 0, 1000),
+                    'call_recording_url' => $recording,
+                ]);
             }
-
-            $this->ai_calling_model->update_lead_from_webhook($call_id, [
-                'ai_call_status'     => $status,
-                'ai_call_summary'    => mb_substr($transcript, 0, 1000),
-                'call_recording_url' => $recording,
-            ]);
         }
 
         http_response_code(200);
