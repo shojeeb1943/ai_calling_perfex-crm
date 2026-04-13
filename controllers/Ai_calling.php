@@ -393,6 +393,122 @@ class Ai_calling extends AdminController
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     }
 
+    /**
+     * Sends a SIP OPTIONS ping to Amarip's SIP server from THIS web server.
+     *
+     * This lets you verify whether Amarip's SIP server (103.170.231.10:5060)
+     * responds to SIP traffic from an EXTERNAL IP (your Hostinger server).
+     *
+     * Result interpretation:
+     *  - Got response (200 OK / 401 / 403 / 405) → Amarip accepts external SIP;
+     *    the 408 error is specific to Vapi's IPs being blocked upstream.
+     *  - No response / timeout → Amarip only accepts from registered/whitelisted
+     *    IPs, which means Vapi's IPs also need to be registered/whitelisted.
+     *
+     * @route  GET admin/ai_calling/test_sip
+     * @return void  Outputs JSON with SIP response or timeout info.
+     */
+    public function test_sip(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $sip_host = '103.170.231.10';
+        $sip_port = 5060;
+        $timeout  = 5; // seconds to wait for a response
+
+        // Get this server's outbound IP (what Amarip will see as the source)
+        $my_ip = gethostbyname(gethostname());
+        // Fallback: try to detect real outbound IP via an external lookup
+        $ext_ip_raw = @file_get_contents('https://api.ipify.org');
+        $ext_ip = ($ext_ip_raw && filter_var(trim($ext_ip_raw), FILTER_VALIDATE_IP))
+            ? trim($ext_ip_raw)
+            : $my_ip;
+
+        $branch  = 'z9hG4bK' . bin2hex(random_bytes(8));
+        $call_id = bin2hex(random_bytes(12)) . '@' . $ext_ip;
+        $tag     = bin2hex(random_bytes(6));
+
+        // Minimal SIP OPTIONS request — standard RFC 3261 probe packet
+        $packet  = "OPTIONS sip:{$sip_host} SIP/2.0\r\n"
+                 . "Via: SIP/2.0/UDP {$ext_ip}:5060;branch={$branch}\r\n"
+                 . "Max-Forwards: 70\r\n"
+                 . "From: <sip:probe@{$ext_ip}>;tag={$tag}\r\n"
+                 . "To: <sip:{$sip_host}>\r\n"
+                 . "Call-ID: {$call_id}\r\n"
+                 . "CSeq: 1 OPTIONS\r\n"
+                 . "Contact: <sip:probe@{$ext_ip}:5060>\r\n"
+                 . "Content-Length: 0\r\n\r\n";
+
+        $result = [
+            'test'          => 'SIP OPTIONS ping',
+            'target'        => "{$sip_host}:{$sip_port}",
+            'source_ip'     => $ext_ip,
+            'timeout_sec'   => $timeout,
+            'packet_bytes'  => strlen($packet),
+        ];
+
+        // Check if UDP socket creation is available on this host
+        if (!function_exists('socket_create')) {
+            $result['error']  = 'PHP socket extension not available on this server. Try the online test instead.';
+            $result['online_test'] = "https://www.siptoolbox.net/tools/sip-options/?host={$sip_host}&port={$sip_port}";
+            echo json_encode($result, JSON_PRETTY_PRINT);
+            return;
+        }
+
+        $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if (!$sock) {
+            $result['error'] = 'socket_create failed: ' . socket_strerror(socket_last_error());
+            echo json_encode($result, JSON_PRETTY_PRINT);
+            return;
+        }
+
+        // Set receive timeout
+        socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeout, 'usec' => 0]);
+
+        $sent = @socket_sendto($sock, $packet, strlen($packet), 0, $sip_host, $sip_port);
+        if ($sent === false) {
+            $result['error'] = 'socket_sendto failed: ' . socket_strerror(socket_last_error($sock));
+            socket_close($sock);
+            echo json_encode($result, JSON_PRETTY_PRINT);
+            return;
+        }
+
+        $result['sent_bytes'] = $sent;
+        $result['sent_at']    = date('Y-m-d H:i:s');
+
+        $response  = '';
+        $from_ip   = '';
+        $from_port = 0;
+        $received  = @socket_recvfrom($sock, $response, 65535, 0, $from_ip, $from_port);
+        socket_close($sock);
+
+        if ($received === false || $received === 0) {
+            // No response — server ignored or dropped the packet
+            $result['received']    = false;
+            $result['conclusion']  = 'NO RESPONSE — Amarip SIP server did not reply within ' . $timeout . 's. '
+                                   . 'Either it only accepts registered IPs, or your hosting provider blocks outbound UDP on port 5060.';
+        } else {
+            // Got something back — parse the SIP status line
+            $first_line = strtok($response, "\r\n");
+            $result['received']       = true;
+            $result['from_ip']        = $from_ip;
+            $result['from_port']      = $from_port;
+            $result['response_bytes'] = $received;
+            $result['sip_status']     = $first_line;
+            $result['raw_response']   = substr($response, 0, 500);
+            $result['conclusion']     = 'RESPONDED — Amarip accepts SIP from external IPs. '
+                                      . 'The 408 error is specific to Vapi\'s IPs. '
+                                      . 'Vapi SIP IPs (44.229.228.186 / 44.238.177.138) must be whitelisted on Amarip.';
+        }
+
+        echo json_encode($result, JSON_PRETTY_PRINT);
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     /**
