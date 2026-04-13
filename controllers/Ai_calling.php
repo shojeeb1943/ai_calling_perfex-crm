@@ -452,59 +452,94 @@ class Ai_calling extends AdminController
             'packet_bytes'  => strlen($packet),
         ];
 
-        // Check if UDP socket creation is available on this host
-        if (!function_exists('socket_create')) {
-            $result['error']  = 'PHP socket extension not available on this server. Try the online test instead.';
-            $result['online_test'] = "https://www.siptoolbox.net/tools/sip-options/?host={$sip_host}&port={$sip_port}";
-            echo json_encode($result, JSON_PRETTY_PRINT);
-            return;
-        }
+        $result['tests'] = [];
 
-        $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if (!$sock) {
-            $result['error'] = 'socket_create failed: ' . socket_strerror(socket_last_error());
-            echo json_encode($result, JSON_PRETTY_PRINT);
-            return;
-        }
+        // ── Test 1: TCP port reachability (fsockopen — allowed on shared hosting) ──
+        // SIP can run over TCP too. This confirms basic network reachability.
+        $tcp_start = microtime(true);
+        $tcp_fp    = @fsockopen('tcp://' . $sip_host, $sip_port, $tcp_errno, $tcp_errstr, $timeout);
+        $tcp_ms    = round((microtime(true) - $tcp_start) * 1000);
 
-        // Set receive timeout
-        socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeout, 'usec' => 0]);
-
-        $sent = @socket_sendto($sock, $packet, strlen($packet), 0, $sip_host, $sip_port);
-        if ($sent === false) {
-            $result['error'] = 'socket_sendto failed: ' . socket_strerror(socket_last_error($sock));
-            socket_close($sock);
-            echo json_encode($result, JSON_PRETTY_PRINT);
-            return;
-        }
-
-        $result['sent_bytes'] = $sent;
-        $result['sent_at']    = date('Y-m-d H:i:s');
-
-        $response  = '';
-        $from_ip   = '';
-        $from_port = 0;
-        $received  = @socket_recvfrom($sock, $response, 65535, 0, $from_ip, $from_port);
-        socket_close($sock);
-
-        if ($received === false || $received === 0) {
-            // No response — server ignored or dropped the packet
-            $result['received']    = false;
-            $result['conclusion']  = 'NO RESPONSE — Amarip SIP server did not reply within ' . $timeout . 's. '
-                                   . 'Either it only accepts registered IPs, or your hosting provider blocks outbound UDP on port 5060.';
+        if ($tcp_fp) {
+            fclose($tcp_fp);
+            $result['tests']['tcp_5060'] = [
+                'status'      => 'OPEN',
+                'connect_ms'  => $tcp_ms,
+                'conclusion'  => 'TCP port 5060 is reachable from this server. Network path exists.',
+            ];
         } else {
-            // Got something back — parse the SIP status line
-            $first_line = strtok($response, "\r\n");
-            $result['received']       = true;
-            $result['from_ip']        = $from_ip;
-            $result['from_port']      = $from_port;
-            $result['response_bytes'] = $received;
-            $result['sip_status']     = $first_line;
-            $result['raw_response']   = substr($response, 0, 500);
-            $result['conclusion']     = 'RESPONDED — Amarip accepts SIP from external IPs. '
-                                      . 'The 408 error is specific to Vapi\'s IPs. '
-                                      . 'Vapi SIP IPs (44.229.228.186 / 44.238.177.138) must be whitelisted on Amarip.';
+            $result['tests']['tcp_5060'] = [
+                'status'      => 'FAILED',
+                'connect_ms'  => $tcp_ms,
+                'errno'       => $tcp_errno,
+                'error'       => $tcp_errstr,
+                'conclusion'  => 'TCP port 5060 is NOT reachable. Could be firewall or TCP not enabled on Amarip.',
+            ];
         }
+
+        // ── Test 2: UDP via fsockopen (lighter than raw socket, sometimes works) ──
+        $udp_start = microtime(true);
+        $udp_fp    = @fsockopen('udp://' . $sip_host, $sip_port, $udp_errno, $udp_errstr, $timeout);
+        $udp_ms    = round((microtime(true) - $udp_start) * 1000);
+
+        if ($udp_fp) {
+            stream_set_timeout($udp_fp, $timeout);
+            @fwrite($udp_fp, $packet);
+            $udp_response = @fread($udp_fp, 65535);
+            fclose($udp_fp);
+
+            if ($udp_response) {
+                $first_line = strtok($udp_response, "\r\n");
+                $result['tests']['udp_5060'] = [
+                    'status'       => 'RESPONDED',
+                    'connect_ms'   => $udp_ms,
+                    'sip_status'   => $first_line,
+                    'raw_response' => substr($udp_response, 0, 400),
+                    'conclusion'   => 'Amarip SIP responded via UDP from this server IP (' . $ext_ip . '). '
+                                   . 'The 408 error is specific to Vapi IPs. Whitelist 44.229.228.186 and 44.238.177.138 on Amarip.',
+                ];
+            } else {
+                $result['tests']['udp_5060'] = [
+                    'status'      => 'NO RESPONSE',
+                    'connect_ms'  => $udp_ms,
+                    'conclusion'  => 'UDP socket opened but Amarip returned no response within ' . $timeout . 's.',
+                ];
+            }
+        } else {
+            $result['tests']['udp_5060'] = [
+                'status'  => 'BLOCKED',
+                'errno'   => $udp_errno,
+                'error'   => $udp_errstr,
+                'conclusion' => 'Hosting blocks outbound UDP entirely. Use the online tool below.',
+            ];
+        }
+
+        // ── Test 3: ICMP-style — see if host is alive via DNS reverse ──
+        $ptr = @gethostbyaddr($sip_host);
+        $result['tests']['reverse_dns'] = [
+            'ip'      => $sip_host,
+            'ptr'     => ($ptr !== $sip_host) ? $ptr : '(no PTR record)',
+        ];
+
+        // ── Overall conclusion ──
+        $tcp_open = ($result['tests']['tcp_5060']['status'] === 'OPEN');
+        $udp_resp = isset($result['tests']['udp_5060']['status']) &&
+                    $result['tests']['udp_5060']['status'] === 'RESPONDED';
+
+        if ($udp_resp) {
+            $result['conclusion'] = 'Amarip SIP is REACHABLE and RESPONDS from external IPs. '
+                                  . 'Root cause: Vapi IPs (44.229.228.186, 44.238.177.138) are not whitelisted.';
+        } elseif ($tcp_open) {
+            $result['conclusion'] = 'Amarip server is REACHABLE on port 5060 (TCP), but UDP gave no response. '
+                                  . 'SIP typically uses UDP. Amarip may require IP registration/whitelist for UDP.';
+        } else {
+            $result['conclusion'] = 'Amarip port 5060 is NOT reachable from this Hostinger server at all. '
+                                  . 'This could be a Hostinger outbound firewall, or Amarip restricts SIP to known IPs only.';
+        }
+
+        // ── Online test fallback ──
+        $result['online_sip_test'] = 'Visit this URL from your browser to run a SIP OPTIONS probe from a neutral server: '
+                                   . 'https://sip.school/tools/sip-options/ — enter host: ' . $sip_host . '  port: ' . $sip_port;
 
         echo json_encode($result, JSON_PRETTY_PRINT);
     }
