@@ -153,7 +153,7 @@ class Ai_calling extends AdminController
         $recording    = $data['message']['recordingUrl']  ?? $call['recordingUrl']  ?? null;
         $ended_reason = $data['message']['endedReason']   ?? $data['endedReason']   ?? null;
 
-        // Vapi endedReason values that mean the human was never reached.
+        // Exact endedReason values that mean the human was never reached.
         $failed_reasons = [
             'customer-did-not-answer',
             'no-answer',
@@ -163,14 +163,22 @@ class Ai_calling extends AdminController
             'error',
         ];
 
+        // Detect any failure: exact match OR anything starting with "error-"
+        // (e.g. "error-providerfault-outbound-sip-408-request-timeout").
+        $is_failed = $ended_reason && (
+            in_array($ended_reason, $failed_reasons, true)
+            || strncmp($ended_reason, 'error-', 6) === 0
+        );
+
+        // SIP/infrastructure errors (never reached network) — refund the
+        // followup_count slot since no real conversation attempt occurred.
+        $is_sip_error = $ended_reason && strpos($ended_reason, 'sip') !== false;
+
         if ($call_id) {
-            if ($ended_reason && in_array($ended_reason, $failed_reasons, true)) {
+            if ($is_failed) {
                 // Call was dispatched but the human was never reached — mark as
                 // failed so the lead is retried in the next calling session.
-                $this->ai_calling_model->update_lead_from_webhook($call_id, [
-                    'ai_call_status'  => 'failed',
-                    'ai_call_summary' => 'Call failed: ' . $ended_reason,
-                ]);
+                $this->ai_calling_model->mark_lead_failed($call_id, $ended_reason, $is_sip_error);
             } else {
                 $status = 'called'; // default when a call ends with no clear signal
                 $lower  = strtolower($transcript);
@@ -258,6 +266,47 @@ class Ai_calling extends AdminController
             'message' => count($added) > 0
                 ? 'Migration complete. Added: ' . implode(', ', $added)
                 : 'All columns already exist. No changes needed.',
+        ], JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * Resets all "called" leads from today that have no transcript back to
+     * "pending" so they can be retried immediately.
+     *
+     * Use this once after a batch of SIP failures to unblock the queue without
+     * manually editing the database. Safe to run multiple times.
+     *
+     * @route  GET admin/ai_calling/reset_stuck_calls
+     * @return void  Outputs JSON: { success, reset_count }
+     */
+    public function reset_stuck_calls(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        // Reset leads marked "called" today that have no summary —
+        // these are SIP failures where the webhook never set a real outcome.
+        // Decrement followup_count so the failed attempt is not penalised.
+        $this->db->query("
+            UPDATE tblleads
+            SET    ai_call_status     = 'pending',
+                   next_followup_date = NULL,
+                   followup_count     = GREATEST(0, followup_count - 1)
+            WHERE  ai_call_status    = 'called'
+              AND  DATE(last_ai_call) = CURDATE()
+              AND  (ai_call_summary IS NULL OR ai_call_summary = '')
+        ");
+
+        $affected = $this->db->affected_rows();
+
+        echo json_encode([
+            'success'     => true,
+            'reset_count' => $affected,
+            'message'     => "{$affected} stuck leads reset to pending.",
         ], JSON_PRETTY_PRINT);
     }
 

@@ -212,4 +212,48 @@ class Ai_calling_model extends App_Model
         $this->db->where('vapi_call_id', $vapi_call_id);
         $this->db->update('tblleads', $fields);
     }
+
+    /**
+     * Marks a lead as failed after a Vapi webhook reports a call error.
+     *
+     * For SIP/infrastructure errors (the call never connected at network level)
+     * the followup_count is decremented so the slot is not wasted — the lead
+     * will be retried as if the call had never been attempted.
+     *
+     * For soft failures (no-answer, busy, voicemail) the count is kept so
+     * repeated unreachable attempts eventually age the lead out.
+     *
+     * In both cases next_followup_date is cleared so get_leads_to_call()
+     * picks the lead up immediately on the next session.
+     *
+     * @param  string $vapi_call_id  Vapi call UUID from the webhook payload.
+     * @param  string $reason        Raw endedReason string from Vapi.
+     * @param  bool   $refund_count  True for SIP errors — refunds followup_count.
+     * @return void
+     */
+    public function mark_lead_failed(string $vapi_call_id, string $reason, bool $refund_count = false): void
+    {
+        $fields = [
+            'ai_call_status'     => 'failed',
+            'ai_call_summary'    => 'Call failed: ' . $reason,
+            'next_followup_date' => null, // retry immediately next session
+        ];
+
+        if ($refund_count) {
+            // Pull current count and decrement (floor 0) — SIP error means
+            // no real call attempt was made.
+            $row = $this->db
+                ->select('followup_count')
+                ->where('vapi_call_id', $vapi_call_id)
+                ->get('tblleads')
+                ->row();
+
+            if ($row) {
+                $fields['followup_count'] = max(0, (int) $row->followup_count - 1);
+            }
+        }
+
+        $this->db->where('vapi_call_id', $vapi_call_id);
+        $this->db->update('tblleads', $fields);
+    }
 }
