@@ -29,12 +29,13 @@ class Ai_calling extends AdminController
     // URL: admin/ai_calling/start_calling  (POST)
     public function start_calling()
     {
+        header('Content-Type: application/json');
+
         if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
             echo json_encode(['success' => false, 'message' => 'Access denied']);
             return;
         }
 
-        header('Content-Type: application/json');
         $result = $this->_run_calling_session();
         echo json_encode($result);
     }

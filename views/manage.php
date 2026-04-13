@@ -236,9 +236,13 @@ document.getElementById('btn-start-calling').addEventListener('click', function 
     btn.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Calling...';
     result.style.display = 'none';
 
+    var csrfData = new FormData();
+    csrfData.append(csrf_token_name, csrf_token_value);
+
     fetch('<?php echo admin_url('ai_calling/start_calling'); ?>', {
         method : 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body   : csrfData
     })
     .then(function (r) { return r.json(); })
     .then(function (data) {

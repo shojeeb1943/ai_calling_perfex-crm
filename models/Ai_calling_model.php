@@ -9,12 +9,10 @@ class Ai_calling_model extends App_Model
     }
 
     /**
-     * Only leads with these two CRM status values will be called.
-     * These are matched directly against tblleads.status (case-insensitive).
-     * Run: SELECT DISTINCT status FROM tblleads LIMIT 20;
-     * to verify the exact values if needed.
+     * Only leads with these two CRM status IDs will be called.
+     * From tblleads_status:  1 = Lead,  2 = FOLLWUP CLIENT
      */
-    private $callable_statuses = ['Lead', 'FOLLOWUP CLIENT'];
+    private $callable_statuses = [1, 2];
 
     public function get_leads_to_call($limit = 50)
     {
