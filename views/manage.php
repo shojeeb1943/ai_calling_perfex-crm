@@ -193,6 +193,43 @@
                 </div>
                 <!-- /provider selector -->
 
+                <!-- ── Test Call ────────────────────────────────────────── -->
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h4 class="panel-title">
+                            <i class="fa fa-flask"></i> Test Call
+                            <small class="text-muted" style="font-weight:normal; margin-left:8px;">
+                                Call a specific number to verify the active provider works
+                            </small>
+                        </h4>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="input-group">
+                                    <span class="input-group-addon"><i class="fa fa-phone"></i></span>
+                                    <input type="text" id="test-call-phone" class="form-control"
+                                           placeholder="e.g. 01792445543 or +8801792445543"
+                                           value="01792445543" />
+                                    <span class="input-group-btn">
+                                        <button id="btn-test-call" class="btn btn-warning">
+                                            <i class="fa fa-phone"></i> Call Now
+                                            <small style="display:block; font-size:10px; font-weight:normal;">
+                                                via <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?></strong>
+                                            </small>
+                                        </button>
+                                    </span>
+                                </div>
+                                <small class="text-muted">Uses the currently active provider. Does NOT create a lead record.</small>
+                            </div>
+                            <div class="col-md-6">
+                                <div id="test-call-result" style="display:none;" class="alert"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- /test call -->
+
                 <!-- ── Manual trigger ───────────────────────────────────── -->
                 <div class="panel panel-default">
                     <div class="panel-body">
@@ -414,6 +451,51 @@ function copyWebhookUrl() {
     document.execCommand('copy');
     alert('Webhook URL copied!');
 }
+
+// ── Test call ─────────────────────────────────────────────────────────────────
+document.getElementById('btn-test-call').addEventListener('click', function () {
+    var btn    = this;
+    var phone  = document.getElementById('test-call-phone').value.trim();
+    var result = document.getElementById('test-call-result');
+
+    if (!phone) { alert('Enter a phone number first.'); return; }
+
+    btn.disabled   = true;
+    btn.innerHTML  = '<i class="fa fa-spinner fa-spin"></i> Calling...';
+    result.style.display = 'none';
+
+    var csrfData = new FormData();
+    csrfData.append('<?php echo $this->security->get_csrf_token_name(); ?>', '<?php echo $this->security->get_csrf_hash(); ?>');
+    csrfData.append('phone', phone);
+
+    fetch('<?php echo admin_url('ai_calling/test_call_number'); ?>', {
+        method : 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body   : csrfData
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        result.style.display = 'block';
+        if (data.success) {
+            result.className = 'alert alert-success';
+            result.innerHTML = '<i class="fa fa-check"></i> <strong>Call dispatched!</strong> '
+                             + data.message + '<br>'
+                             + '<small>Vapi Call ID: <code>' + data.call_id + '</code></small>';
+        } else {
+            result.className = 'alert alert-danger';
+            result.innerHTML = '<i class="fa fa-times"></i> <strong>Failed:</strong> ' + data.message;
+        }
+    })
+    .catch(function (err) {
+        result.style.display = 'block';
+        result.className     = 'alert alert-danger';
+        result.innerHTML     = 'Error: ' + err.message;
+    })
+    .finally(function () {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fa fa-phone"></i> Call Now<small style="display:block;font-size:10px;font-weight:normal;">via <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?></strong></small>';
+    });
+});
 
 // ── Provider switcher ─────────────────────────────────────────────────────────
 document.querySelectorAll('.btn-switch-provider').forEach(function (btn) {

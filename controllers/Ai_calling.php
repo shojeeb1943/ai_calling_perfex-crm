@@ -271,6 +271,97 @@ class Ai_calling extends AdminController
     }
 
     /**
+     * Triggers a test call to a specific phone number using the active provider.
+     *
+     * Unlike test_api() which picks the first pending lead, this endpoint
+     * calls an exact number you provide — useful for verifying a new provider
+     * (e.g. Twilio) before running it against real leads.
+     *
+     * @route  POST admin/ai_calling/test_call_number
+     * @return void  Outputs JSON with call result and Vapi call ID.
+     */
+    public function test_call_number(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $raw_phone = trim($this->input->post('phone'));
+        if (empty($raw_phone)) {
+            echo json_encode(['success' => false, 'message' => 'Phone number is required.']);
+            return;
+        }
+
+        $provider = get_option('ai_calling_provider') ?: 'amarip';
+        $phone_id = ($provider === 'twilio') ? AI_VAPI_TWILIO_PHONE_ID : AI_VAPI_PHONE_ID;
+        $phone    = $this->_format_phone($raw_phone);
+
+        $payload = [
+            'phoneNumberId' => $phone_id,
+            'assistantId'   => AI_VAPI_ASSISTANT_ID,
+            'customer'      => [
+                'number'                 => $phone,
+                'numberE164CheckEnabled' => false,
+            ],
+            'assistantOverrides' => [
+                'variableValues' => [
+                    'leadName' => 'Test Call',
+                    'leadId'   => '0',
+                    'callTime' => date('Y-m-d H:i:s'),
+                    'context'  => 'This is a test call to verify the calling provider is working.',
+                ],
+            ],
+        ];
+
+        $ch = curl_init(AI_VAPI_API_URL);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST  => 'POST',
+            CURLOPT_POSTFIELDS     => json_encode($payload),
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . AI_VAPI_API_KEY,
+            ],
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_SSL_VERIFYPEER => false,
+        ]);
+
+        $response  = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_err  = curl_error($ch);
+        curl_close($ch);
+
+        if ($curl_err) {
+            echo json_encode(['success' => false, 'message' => 'cURL error: ' . $curl_err]);
+            return;
+        }
+
+        $body = json_decode($response, true);
+
+        if ($http_code >= 200 && $http_code < 300 && !empty($body['id'])) {
+            echo json_encode([
+                'success'   => true,
+                'call_id'   => $body['id'],
+                'provider'  => $provider,
+                'phone'     => $phone,
+                'message'   => 'Call dispatched via ' . ($provider === 'twilio' ? 'Twilio' : 'Amarip') . '. Check your phone.',
+            ]);
+        } else {
+            $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
+            echo json_encode([
+                'success'  => false,
+                'provider' => $provider,
+                'phone'    => $phone,
+                'message'  => $err,
+                'raw'      => $body,
+            ]);
+        }
+    }
+
+    /**
      * Switches the active calling provider between Amarip and Twilio.
      *
      * Saves the choice to Perfex CRM's options table so it persists across
