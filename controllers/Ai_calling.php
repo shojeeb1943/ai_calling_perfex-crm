@@ -51,9 +51,10 @@ class Ai_calling extends AdminController
             access_denied(AI_CALLING_MODULE_NAME);
         }
 
-        $data['stats']        = $this->ai_calling_model->get_stats();
-        $data['recent_calls'] = $this->ai_calling_model->get_recent_calls(20);
-        $data['title']        = _l('ai_calling_dashboard');
+        $data['stats']           = $this->ai_calling_model->get_stats();
+        $data['recent_calls']    = $this->ai_calling_model->get_recent_calls(20);
+        $data['active_provider'] = get_option('ai_calling_provider') ?: 'amarip';
+        $data['title']           = _l('ai_calling_dashboard');
 
         $this->load->view('ai_calling/manage', $data);
     }
@@ -267,6 +268,52 @@ class Ai_calling extends AdminController
                 ? 'Migration complete. Added: ' . implode(', ', $added)
                 : 'All columns already exist. No changes needed.',
         ], JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * Switches the active calling provider between Amarip and Twilio.
+     *
+     * Saves the choice to Perfex CRM's options table so it persists across
+     * sessions. The dashboard reads this value to show the active provider
+     * and the calling session uses it to pick the correct Vapi phoneNumberId.
+     *
+     * @route  POST admin/ai_calling/switch_provider
+     * @return void  Outputs JSON: { success, provider, label }
+     */
+    public function switch_provider(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $requested = $this->input->post('provider');
+
+        if (!in_array($requested, ['amarip', 'twilio'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Invalid provider. Use "amarip" or "twilio".']);
+            return;
+        }
+
+        // Validate that the Twilio phone ID is configured before switching to it
+        if ($requested === 'twilio' && empty(AI_VAPI_TWILIO_PHONE_ID)) {
+            echo json_encode([
+                'success' => false,
+                'message' => 'Twilio Phone ID is not configured in config/vapi.php. '
+                           . 'Add your Vapi Twilio Phone Number ID as AI_VAPI_TWILIO_PHONE_ID.',
+            ]);
+            return;
+        }
+
+        update_option('ai_calling_provider', $requested);
+
+        $labels = ['amarip' => 'Amarip SIP Trunk', 'twilio' => 'Twilio'];
+        echo json_encode([
+            'success'  => true,
+            'provider' => $requested,
+            'label'    => $labels[$requested],
+        ]);
     }
 
     /**
@@ -637,10 +684,12 @@ class Ai_calling extends AdminController
      */
     private function _call_lead(array $lead): array
     {
-        $phone = $this->_format_phone($lead['phonenumber']);
+        $phone    = $this->_format_phone($lead['phonenumber']);
+        $provider = get_option('ai_calling_provider') ?: 'amarip';
+        $phone_id = ($provider === 'twilio') ? AI_VAPI_TWILIO_PHONE_ID : AI_VAPI_PHONE_ID;
 
         $payload = [
-            'phoneNumberId' => AI_VAPI_PHONE_ID,
+            'phoneNumberId' => $phone_id,
             'assistantId'   => AI_VAPI_ASSISTANT_ID,
             'customer'      => [
                 'number'                 => $phone,
@@ -657,6 +706,8 @@ class Ai_calling extends AdminController
         ];
 
         // Log the outbound request for debugging SIP issues
+        $lead['_provider'] = $provider;
+        $lead['_phone_id'] = $phone_id;
         $this->_log_call_attempt($lead, $phone, $payload);
 
         $ch = curl_init(AI_VAPI_API_URL);
@@ -853,12 +904,13 @@ class Ai_calling extends AdminController
         $entry = [
             'time'       => date('Y-m-d H:i:s'),
             'action'     => 'OUTBOUND_REQUEST',
+            'provider'   => $lead['_provider'] ?? 'amarip',
             'lead_id'    => $lead['id'],
             'lead_name'  => $lead['name'],
             'phone_raw'  => $lead['phonenumber'],
             'phone_e164' => $phone,
             'api_url'    => AI_VAPI_API_URL,
-            'phone_id'   => AI_VAPI_PHONE_ID,
+            'phone_id'   => $lead['_phone_id'] ?? AI_VAPI_PHONE_ID,
             'assistant'  => AI_VAPI_ASSISTANT_ID,
         ];
         file_put_contents(

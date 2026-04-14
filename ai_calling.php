@@ -49,8 +49,11 @@ if (file_exists($_vapi_config)) {
     /** @var string Vapi REST API key (Bearer token). */
     define('AI_VAPI_API_KEY',      '');
 
-    /** @var string Vapi Phone Number ID to originate calls from. */
+    /** @var string Vapi Phone Number ID for Amarip SIP trunk. */
     define('AI_VAPI_PHONE_ID',     '');
+
+    /** @var string Vapi Phone Number ID for Twilio (second provider). */
+    define('AI_VAPI_TWILIO_PHONE_ID', '');
 
     /** @var string Vapi Assistant ID that handles the conversation. */
     define('AI_VAPI_ASSISTANT_ID', '');
@@ -59,6 +62,11 @@ if (file_exists($_vapi_config)) {
     define('AI_CRON_TOKEN',        'change-me');
 
     log_message('error', '[ai_calling] config/vapi.php is missing! Copy vapi.example.php → vapi.php');
+}
+
+// Ensure Twilio constant exists even on older vapi.php files that predate this feature
+if (!defined('AI_VAPI_TWILIO_PHONE_ID')) {
+    define('AI_VAPI_TWILIO_PHONE_ID', '');
 }
 
 // ─── API & calling behaviour constants ───────────────────────────────────────

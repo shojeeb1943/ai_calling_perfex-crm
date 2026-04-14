@@ -86,6 +86,113 @@
                 </div>
                 <!-- /stat cards -->
 
+                <!-- ── Provider Selector ────────────────────────────────── -->
+                <?php
+                $active_provider   = $active_provider ?? 'amarip';
+                $twilio_configured = defined('AI_VAPI_TWILIO_PHONE_ID') && AI_VAPI_TWILIO_PHONE_ID !== '' && AI_VAPI_TWILIO_PHONE_ID !== 'your-twilio-phone-number-id-in-vapi';
+                ?>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h4 class="panel-title">
+                            <i class="fa fa-exchange"></i> Calling Provider
+                            <small class="text-muted" style="font-weight:normal; margin-left:8px;">
+                                Active provider is used for all outbound calls
+                            </small>
+                        </h4>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+
+                            <!-- Amarip card -->
+                            <div class="col-md-5">
+                                <div class="panel <?php echo $active_provider === 'amarip' ? 'panel-success' : 'panel-default'; ?>"
+                                     style="margin-bottom:0; border-width:2px;">
+                                    <div class="panel-body">
+                                        <div class="row">
+                                            <div class="col-xs-9">
+                                                <h4 class="no-margin">
+                                                    <i class="fa fa-server"></i> Amarip SIP Trunk
+                                                    <?php if ($active_provider === 'amarip'): ?>
+                                                        <span class="label label-success" style="font-size:10px; vertical-align:middle;">ACTIVE</span>
+                                                    <?php endif; ?>
+                                                </h4>
+                                                <small class="text-muted">BYO SIP trunk via Vapi · Local BD provider</small>
+                                                <div style="margin-top:6px; font-size:12px;">
+                                                    <span class="text-warning"><i class="fa fa-exclamation-triangle"></i> BD IPs only — may fail from Vapi (US)</span>
+                                                </div>
+                                            </div>
+                                            <div class="col-xs-3 text-right">
+                                                <?php if ($active_provider !== 'amarip'): ?>
+                                                    <button class="btn btn-default btn-sm btn-switch-provider"
+                                                            data-provider="amarip"
+                                                            title="Switch to Amarip">
+                                                        <i class="fa fa-toggle-off"></i> Use
+                                                    </button>
+                                                <?php else: ?>
+                                                    <button class="btn btn-success btn-sm" disabled>
+                                                        <i class="fa fa-check"></i>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Arrow -->
+                            <div class="col-md-2 text-center" style="padding-top:20px; font-size:20px; color:#ccc;">
+                                <i class="fa fa-exchange"></i>
+                            </div>
+
+                            <!-- Twilio card -->
+                            <div class="col-md-5">
+                                <div class="panel <?php echo $active_provider === 'twilio' ? 'panel-info' : 'panel-default'; ?>"
+                                     style="margin-bottom:0; border-width:2px;">
+                                    <div class="panel-body">
+                                        <div class="row">
+                                            <div class="col-xs-9">
+                                                <h4 class="no-margin">
+                                                    <i class="fa fa-cloud"></i> Twilio
+                                                    <?php if ($active_provider === 'twilio'): ?>
+                                                        <span class="label label-info" style="font-size:10px; vertical-align:middle;">ACTIVE</span>
+                                                    <?php endif; ?>
+                                                </h4>
+                                                <small class="text-muted">Global cloud telephony · Works internationally</small>
+                                                <div style="margin-top:6px; font-size:12px;">
+                                                    <?php if ($twilio_configured): ?>
+                                                        <span class="text-success"><i class="fa fa-check-circle"></i> Phone ID configured</span>
+                                                    <?php else: ?>
+                                                        <span class="text-danger"><i class="fa fa-times-circle"></i> Set AI_VAPI_TWILIO_PHONE_ID in vapi.php</span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <div class="col-xs-3 text-right">
+                                                <?php if ($active_provider !== 'twilio'): ?>
+                                                    <button class="btn btn-<?php echo $twilio_configured ? 'default' : 'default disabled'; ?> btn-sm btn-switch-provider"
+                                                            data-provider="twilio"
+                                                            <?php echo !$twilio_configured ? 'disabled title="Configure AI_VAPI_TWILIO_PHONE_ID first"' : 'title="Switch to Twilio"'; ?>>
+                                                        <i class="fa fa-toggle-off"></i> Use
+                                                    </button>
+                                                <?php else: ?>
+                                                    <button class="btn btn-info btn-sm" disabled>
+                                                        <i class="fa fa-check"></i>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div><!-- /row -->
+
+                        <!-- Provider switch result -->
+                        <div id="provider-alert" style="display:none; margin-top:12px;" class="alert"></div>
+
+                    </div>
+                </div>
+                <!-- /provider selector -->
+
                 <!-- ── Manual trigger ───────────────────────────────────── -->
                 <div class="panel panel-default">
                     <div class="panel-body">
@@ -93,14 +200,18 @@
                             <div class="col-md-8">
                                 <h4 class="no-margin">Start Calling Session</h4>
                                 <p class="text-muted" style="margin-bottom:0;">
-                                    Calls up to <strong><?php echo AI_MAX_CALLS_PER_RUN; ?></strong> pending leads now via Vapi AI.
+                                    Calls up to <strong><?php echo AI_MAX_CALLS_PER_RUN; ?></strong> pending leads now via
+                                    <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip SIP'; ?></strong>.
                                     Max <strong><?php echo AI_MAX_FOLLOWUPS; ?></strong> attempts per lead,
                                     followup in <strong><?php echo AI_FOLLOWUP_DAYS; ?></strong> days.
                                 </p>
                             </div>
                             <div class="col-md-4 text-right">
-                                <button id="btn-start-calling" class="btn btn-success btn-lg">
+                                <button id="btn-start-calling" class="btn btn-<?php echo $active_provider === 'twilio' ? 'info' : 'success'; ?> btn-lg">
                                     <i class="fa fa-phone"></i> Start Calling Now
+                                    <small style="display:block; font-size:11px; font-weight:normal; opacity:0.85;">
+                                        via <?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?>
+                                    </small>
                                 </button>
                             </div>
                         </div>
@@ -303,4 +414,45 @@ function copyWebhookUrl() {
     document.execCommand('copy');
     alert('Webhook URL copied!');
 }
+
+// ── Provider switcher ─────────────────────────────────────────────────────────
+document.querySelectorAll('.btn-switch-provider').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var provider     = this.dataset.provider;
+        var providerAlert = document.getElementById('provider-alert');
+        var allBtns      = document.querySelectorAll('.btn-switch-provider');
+
+        allBtns.forEach(function (b) { b.disabled = true; });
+        providerAlert.style.display = 'none';
+
+        var csrfData = new FormData();
+        csrfData.append('<?php echo $this->security->get_csrf_token_name(); ?>', '<?php echo $this->security->get_csrf_hash(); ?>');
+        csrfData.append('provider', provider);
+
+        fetch('<?php echo admin_url('ai_calling/switch_provider'); ?>', {
+            method : 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body   : csrfData
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            providerAlert.style.display = 'block';
+            if (data.success) {
+                providerAlert.className = 'alert alert-success';
+                providerAlert.innerHTML = '<i class="fa fa-check"></i> Switched to <strong>' + data.label + '</strong>. Reloading...';
+                setTimeout(function () { location.reload(); }, 1200);
+            } else {
+                providerAlert.className = 'alert alert-danger';
+                providerAlert.innerHTML = '<i class="fa fa-times"></i> ' + data.message;
+                allBtns.forEach(function (b) { b.disabled = false; });
+            }
+        })
+        .catch(function (err) {
+            providerAlert.style.display = 'block';
+            providerAlert.className     = 'alert alert-danger';
+            providerAlert.innerHTML     = 'Error: ' + err.message;
+            allBtns.forEach(function (b) { b.disabled = false; });
+        });
+    });
+});
 </script>
