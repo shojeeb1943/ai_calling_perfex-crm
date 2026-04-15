@@ -209,8 +209,8 @@
                                 <div class="input-group">
                                     <span class="input-group-addon"><i class="fa fa-phone"></i></span>
                                     <input type="text" id="test-call-phone" class="form-control"
-                                           placeholder="e.g. 01792445543 or +8801792445543"
-                                           value="01792445543" />
+                                           placeholder="e.g. 01816122188 or +8801816122188"
+                                           value="01816122188" />
                                     <span class="input-group-btn">
                                         <button id="btn-test-call" class="btn btn-warning">
                                             <i class="fa fa-phone"></i> Call Now
