@@ -331,17 +331,14 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => array_merge(
-                $this->_bangla_overrides(),
-                [
-                    'variableValues' => [
-                        'leadName' => 'Test Call',
-                        'leadId'   => '0',
-                        'callTime' => date('Y-m-d H:i:s'),
-                        'context'  => 'এটি একটি টেস্ট কল — calling provider যাচাই করা হচ্ছে।',
-                    ],
-                ]
-            ),
+            'assistantOverrides' => [
+                'variableValues' => [
+                    'leadName' => 'Test Call',
+                    'leadId'   => '0',
+                    'callTime' => date('Y-m-d H:i:s'),
+                    'context'  => 'এটি একটি টেস্ট কল — calling provider যাচাই করা হচ্ছে।',
+                ],
+            ],
         ];
 
         $ch = curl_init(AI_VAPI_API_URL);
@@ -517,17 +514,14 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => array_merge(
-                $this->_bangla_overrides(),
-                [
-                    'variableValues' => [
-                        'leadName' => $lead['name'],
-                        'leadId'   => (string) $lead['id'],
-                        'callTime' => date('Y-m-d H:i:s'),
-                        'context'  => $lead['ai_context_notes'] ?? '',
-                    ],
-                ]
-            ),
+            'assistantOverrides' => [
+                'variableValues' => [
+                    'leadName' => $lead['name'],
+                    'leadId'   => (string) $lead['id'],
+                    'callTime' => date('Y-m-d H:i:s'),
+                    'context'  => $lead['ai_context_notes'] ?? '',
+                ],
+            ],
         ];
 
         $ch = curl_init(AI_VAPI_API_URL);
@@ -817,17 +811,14 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => array_merge(
-                $this->_bangla_overrides(),
-                [
-                    'variableValues' => [
-                        'leadName' => $lead['name'],
-                        'leadId'   => (string) $lead['id'],
-                        'callTime' => date('Y-m-d H:i:s'),
-                        'context'  => $lead['ai_context_notes'] ?? '',
-                    ],
-                ]
-            ),
+            'assistantOverrides' => [
+                'variableValues' => [
+                    'leadName' => $lead['name'],
+                    'leadId'   => (string) $lead['id'],
+                    'callTime' => date('Y-m-d H:i:s'),
+                    'context'  => $lead['ai_context_notes'] ?? '',
+                ],
+            ],
         ];
 
         // Log the outbound request for debugging SIP issues
@@ -879,55 +870,6 @@ class Ai_calling extends AdminController
 
         $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
         return ['success' => false, 'error' => $err];
-    }
-
-    /**
-     * Returns Vapi assistantOverrides that force fully Bangla voice and transcription.
-     *
-     * Merges cleanly with variableValues via array_merge() in each call site.
-     *
-     * transcriber:
-     *   - Deepgram nova-2 with language "bn" understands Bangla speech.
-     *   - endpointing 400 ms — waits a bit longer after the caller stops speaking,
-     *     which fixes the "2nd question gets cut off" problem.
-     *
-     * voice:
-     *   - Azure bn-BD-NabanitaNeural is the best-accent Bangla female voice.
-     *   - speed 0.9 makes speech slightly slower → clearer on phone calls.
-     *
-     * silenceTimeoutSeconds:
-     *   - 5 s before the assistant assumes the caller has finished — prevents it
-     *     from cutting in while the caller is still forming a 2nd question.
-     *
-     * @return array  Partial assistantOverrides array (no variableValues key).
-     */
-    private function _bangla_overrides(): array
-    {
-        return [
-            // ── STT: Google Gemini Flash — only provider with Bengali support ─
-            'transcriber' => [
-                'provider' => 'google',
-                'model'    => 'gemini-2.0-flash',
-                'language' => 'bn-BD',  // Bangladesh Bengali
-            ],
-
-            // ── TTS: Azure custom voice — manually added BD accent ────────────
-            'voice' => [
-                'provider'           => 'azure',
-                'voiceId'            => 'bn-BD-NabanitaNeural',
-                'speed'              => 0.9,   // slightly slower = clearer on phone
-                'inputPunctuationBoundaries' => ['.', '?', '!', '।'],
-            ],
-
-            // ── Give caller time to finish 2nd question before AI cuts in ─────
-            'silenceTimeoutSeconds' => 5,
-            'startSpeakingPlan' => [
-                'waitSeconds'           => 0.4,
-                'onPunctuationSeconds'  => 0.4,   // was 0.1 — too aggressive
-                'onNoPunctuationSeconds'=> 1.5,
-                'onNumberSeconds'       => 0.5,
-            ],
-        ];
     }
 
     /**
