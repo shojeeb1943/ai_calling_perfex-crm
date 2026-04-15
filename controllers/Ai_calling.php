@@ -184,15 +184,40 @@ class Ai_calling extends AdminController
                 $status = 'called'; // default when a call ends with no clear signal
                 $lower  = strtolower($transcript);
 
-                if (strpos($lower, 'interested') !== false && strpos($lower, 'not interested') === false) {
-                    $status = 'interested';
-                } elseif (strpos($lower, 'not interested') !== false || strpos($lower, 'no interest') !== false) {
-                    $status = 'not_interested';
-                } elseif (
+                // ── Interested keywords (English + Bangla) ────────────────────
+                $is_interested = (
+                    (strpos($lower, 'interested') !== false && strpos($lower, 'not interested') === false)
+                    || strpos($transcript, 'আগ্রহী') !== false
+                    || strpos($transcript, 'আগ্রহ আছে') !== false
+                    || strpos($transcript, 'জানতে চাই') !== false
+                    || strpos($transcript, 'হ্যাঁ') !== false
+                );
+
+                // ── Not interested keywords (English + Bangla) ────────────────
+                $is_not_interested = (
+                    strpos($lower, 'not interested') !== false
+                    || strpos($lower, 'no interest') !== false
+                    || strpos($transcript, 'আগ্রহী না') !== false
+                    || strpos($transcript, 'দরকার নেই') !== false
+                    || strpos($transcript, 'লাগবে না') !== false
+                    || strpos($transcript, 'না ধন্যবাদ') !== false
+                );
+
+                // ── Callback keywords (English + Bangla) ──────────────────────
+                $is_callback = (
                     strpos($lower, 'callback') !== false
                     || strpos($lower, 'call back') !== false
                     || strpos($lower, 'call me later') !== false
-                ) {
+                    || strpos($transcript, 'পরে কল') !== false
+                    || strpos($transcript, 'আবার ফোন') !== false
+                    || strpos($transcript, 'পরে যোগাযোগ') !== false
+                );
+
+                if ($is_not_interested) {
+                    $status = 'not_interested';
+                } elseif ($is_interested) {
+                    $status = 'interested';
+                } elseif ($is_callback) {
                     $status = 'callback_scheduled';
                 }
 
@@ -306,14 +331,17 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => [
-                'variableValues' => [
-                    'leadName' => 'Test Call',
-                    'leadId'   => '0',
-                    'callTime' => date('Y-m-d H:i:s'),
-                    'context'  => 'This is a test call to verify the calling provider is working.',
-                ],
-            ],
+            'assistantOverrides' => array_merge(
+                $this->_bangla_overrides(),
+                [
+                    'variableValues' => [
+                        'leadName' => 'Test Call',
+                        'leadId'   => '0',
+                        'callTime' => date('Y-m-d H:i:s'),
+                        'context'  => 'এটি একটি টেস্ট কল — calling provider যাচাই করা হচ্ছে।',
+                    ],
+                ]
+            ),
         ];
 
         $ch = curl_init(AI_VAPI_API_URL);
@@ -489,14 +517,17 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => [
-                'variableValues' => [
-                    'leadName' => $lead['name'],
-                    'leadId'   => (string) $lead['id'],
-                    'callTime' => date('Y-m-d H:i:s'),
-                    'context'  => $lead['ai_context_notes'] ?? '',
-                ],
-            ],
+            'assistantOverrides' => array_merge(
+                $this->_bangla_overrides(),
+                [
+                    'variableValues' => [
+                        'leadName' => $lead['name'],
+                        'leadId'   => (string) $lead['id'],
+                        'callTime' => date('Y-m-d H:i:s'),
+                        'context'  => $lead['ai_context_notes'] ?? '',
+                    ],
+                ]
+            ),
         ];
 
         $ch = curl_init(AI_VAPI_API_URL);
@@ -786,14 +817,17 @@ class Ai_calling extends AdminController
                 'number'                 => $phone,
                 'numberE164CheckEnabled' => false,
             ],
-            'assistantOverrides' => [
-                'variableValues' => [
-                    'leadName' => $lead['name'],
-                    'leadId'   => (string) $lead['id'],
-                    'callTime' => date('Y-m-d H:i:s'),
-                    'context'  => $lead['ai_context_notes'] ?? '',
-                ],
-            ],
+            'assistantOverrides' => array_merge(
+                $this->_bangla_overrides(),
+                [
+                    'variableValues' => [
+                        'leadName' => $lead['name'],
+                        'leadId'   => (string) $lead['id'],
+                        'callTime' => date('Y-m-d H:i:s'),
+                        'context'  => $lead['ai_context_notes'] ?? '',
+                    ],
+                ]
+            ),
         ];
 
         // Log the outbound request for debugging SIP issues
@@ -845,6 +879,55 @@ class Ai_calling extends AdminController
 
         $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
         return ['success' => false, 'error' => $err];
+    }
+
+    /**
+     * Returns Vapi assistantOverrides that force fully Bangla voice and transcription.
+     *
+     * Merges cleanly with variableValues via array_merge() in each call site.
+     *
+     * transcriber:
+     *   - Deepgram nova-2 with language "bn" understands Bangla speech.
+     *   - endpointing 400 ms — waits a bit longer after the caller stops speaking,
+     *     which fixes the "2nd question gets cut off" problem.
+     *
+     * voice:
+     *   - Azure bn-BD-NabanitaNeural is the best-accent Bangla female voice.
+     *   - speed 0.9 makes speech slightly slower → clearer on phone calls.
+     *
+     * silenceTimeoutSeconds:
+     *   - 5 s before the assistant assumes the caller has finished — prevents it
+     *     from cutting in while the caller is still forming a 2nd question.
+     *
+     * @return array  Partial assistantOverrides array (no variableValues key).
+     */
+    private function _bangla_overrides(): array
+    {
+        return [
+            // ── STT: Google Gemini Flash — only provider with Bengali support ─
+            'transcriber' => [
+                'provider' => 'google',
+                'model'    => 'gemini-2.0-flash',
+                'language' => 'bn-BD',  // Bangladesh Bengali
+            ],
+
+            // ── TTS: Azure custom voice — manually added BD accent ────────────
+            'voice' => [
+                'provider'           => 'azure',
+                'voiceId'            => 'bn-BD-NabanitaNeural',
+                'speed'              => 0.9,   // slightly slower = clearer on phone
+                'inputPunctuationBoundaries' => ['.', '?', '!', '।'],
+            ],
+
+            // ── Give caller time to finish 2nd question before AI cuts in ─────
+            'silenceTimeoutSeconds' => 5,
+            'startSpeakingPlan' => [
+                'waitSeconds'           => 0.4,
+                'onPunctuationSeconds'  => 0.4,   // was 0.1 — too aggressive
+                'onNoPunctuationSeconds'=> 1.5,
+                'onNumberSeconds'       => 0.5,
+            ],
+        ];
     }
 
     /**
