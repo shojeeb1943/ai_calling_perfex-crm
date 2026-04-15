@@ -148,7 +148,8 @@ class Ai_calling_model extends App_Model
         return [
             'pending'        => $pending,
             'called_today'   => $this->db->where('DATE(last_ai_call)', $today)->get('tblleads')->num_rows(),
-            'interested'     => $this->db->where('ai_call_status', 'interested')->get('tblleads')->num_rows(),
+            // "interested" = callback_scheduled with CRM status=2 (FOLLOWUP CLIENT)
+            'interested'     => $this->db->where('ai_call_status', 'callback_scheduled')->where('status', 2)->get('tblleads')->num_rows(),
             'callback'       => $this->db->where('ai_call_status', 'callback_scheduled')->get('tblleads')->num_rows(),
             'not_interested' => $this->db->where('ai_call_status', 'not_interested')->get('tblleads')->num_rows(),
             'failed'         => $this->db->where('ai_call_status', 'failed')->get('tblleads')->num_rows(),

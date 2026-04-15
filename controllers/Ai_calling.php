@@ -213,19 +213,39 @@ class Ai_calling extends AdminController
                     || strpos($transcript, 'পরে যোগাযোগ') !== false
                 );
 
+                // CRM lead status IDs (tblleads_status)
+                // 2 = FOLLOWUP CLIENT  |  8 = CLOSE CLIENT
+                $crm_status = null;
+
                 if ($is_not_interested) {
-                    $status = 'not_interested';
+                    // Not interested → permanently close the lead, stop all calls
+                    $status     = 'not_interested';
+                    $crm_status = 8; // CLOSE CLIENT
                 } elseif ($is_interested) {
-                    $status = 'interested';
+                    // Interested → move to FOLLOWUP CLIENT queue, schedule next call
+                    $status     = 'callback_scheduled';
+                    $crm_status = 2; // FOLLOWUP CLIENT
                 } elseif ($is_callback) {
                     $status = 'callback_scheduled';
                 }
 
-                $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                $fields = [
                     'ai_call_status'     => $status,
                     'ai_call_summary'    => mb_substr($transcript, 0, 1000),
                     'call_recording_url' => $recording,
-                ]);
+                ];
+
+                // Schedule followup date when customer wants a callback or is interested
+                if ($status === 'callback_scheduled') {
+                    $fields['next_followup_date'] = date('Y-m-d', strtotime('+' . AI_FOLLOWUP_DAYS . ' days'));
+                }
+
+                // Update CRM lead status if outcome requires it
+                if ($crm_status !== null) {
+                    $fields['status'] = $crm_status;
+                }
+
+                $this->ai_calling_model->update_lead_from_webhook($call_id, $fields);
             }
         }
 
