@@ -2,7 +2,7 @@
 /**
  * @file        ai_calling.php
  * @package     Perfex CRM — AI Calling Module
- * @version     1.0.0
+ * @version     1.2.0
  * @author      Format Design
  *
  * Module bootstrap file. Loaded by Perfex CRM on every request when the module
@@ -15,6 +15,15 @@
  * ─── Configuration ────────────────────────────────────────────────────────────
  * Copy  config/vapi.example.php  →  config/vapi.php  and fill in real values.
  * The vapi.php file is git-ignored and must never be committed.
+ *
+ * ─── Changelog ────────────────────────────────────────────────────────────────
+ * 1.2.0  2026-04-15  Bangla webhook keyword detection; removed invalid
+ *                    assistantOverrides (transcriber/voice/startSpeakingPlan)
+ *                    that conflicted with Vapi/Twilio — dashboard settings now
+ *                    used directly. Added AI_CALLING_VERSION constant.
+ * 1.1.0  2026-04-15  Bangla language support: Google transcriber, Azure
+ *                    bn-BD-NabanitaNeural voice, endpointing tuning.
+ * 1.0.0  —           Initial release.
  */
 
 defined('BASEPATH') or exit('No direct script access allowed');
@@ -22,12 +31,15 @@ defined('BASEPATH') or exit('No direct script access allowed');
 /*
 Module Name: AI Calling
 Description: Automated Vapi AI outbound calling for Perfex CRM leads
-Version: 1.0.0
+Version: 1.2.0
 Requires at least: 2.3.*
 Author: Format Design
 */
 
 // ─── Module identity ──────────────────────────────────────────────────────────
+
+/** @var string Current module version — update this with every change. */
+define('AI_CALLING_VERSION', '1.2.0');
 
 /** @var string Slug used in routes, permissions, language keys, and hooks. */
 define('AI_CALLING_MODULE_NAME', 'ai_calling');

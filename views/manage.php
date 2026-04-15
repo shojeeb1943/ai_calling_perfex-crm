@@ -12,6 +12,7 @@
                     <h3 class="no-margin">
                         <i class="fa fa-phone text-success"></i>
                         AI Calling Dashboard
+                        <small class="text-muted" style="font-size:13px;margin-left:8px;">v<?php echo AI_CALLING_VERSION; ?></small>
                     </h3>
                     <small class="text-muted">Automated Vapi AI lead calling system</small>
                 </div>
