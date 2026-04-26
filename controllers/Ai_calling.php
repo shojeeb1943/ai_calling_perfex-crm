@@ -145,6 +145,27 @@ class Ai_calling extends AdminController
             die('Invalid payload');
         }
 
+        // --- EARLY RETURN (PREVENT WEBHOOK TRAP) ---
+        // Instantly respond to Vapi so the AI doesn't pause waiting for the database.
+        $toolCallId = $data['message']['toolCalls'][0]['id'] ?? null;
+        $response = $toolCallId 
+            ? ["results" => [["toolCallId" => $toolCallId, "result" => "Success."]]]
+            : ["status" => "received"];
+
+        ob_start();
+        echo json_encode($response);
+        header('Connection: close');
+        header('Content-Length: ' . ob_get_length());
+        header('Content-Type: application/json');
+        ob_end_flush();
+        ob_flush();
+        flush();
+
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+        // -------------------------------------------
+
         $this->_log_webhook($data);
 
         // Vapi sends different event shapes; handle both nested and flat layouts.
