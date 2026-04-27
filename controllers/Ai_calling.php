@@ -169,11 +169,33 @@ class Ai_calling extends AdminController
         $this->_log_webhook($data);
 
         // Vapi sends different event shapes; handle both nested and flat layouts.
+        $msg_type     = $data['message']['type']          ?? $data['type']          ?? null;
         $call         = $data['message']['call']          ?? $data['call']          ?? [];
         $call_id      = $call['id']                       ?? null;
         $transcript   = $data['message']['transcript']    ?? $data['transcript']    ?? '';
         $recording    = $data['message']['recordingUrl']  ?? $call['recordingUrl']  ?? null;
         $ended_reason = $data['message']['endedReason']   ?? $data['endedReason']   ?? null;
+
+        // ── Tool call: notifyExpert ──────────────────────────────────────────────
+        // Vapi fires this when AI calls the notifyExpert tool during a live call.
+        // We send a WhatsApp notification to the owner and update the lead status.
+        if ($msg_type === 'tool-calls') {
+            $tool_calls = $data['message']['toolCalls'] ?? [];
+            foreach ($tool_calls as $tool) {
+                if (($tool['function']['name'] ?? '') === 'notifyExpert') {
+                    $client_name   = $call['customer']['name']   ?? ($tool['function']['arguments']['clientName'] ?? 'Unknown');
+                    $client_phone  = $call['customer']['number'] ?? ($tool['function']['arguments']['clientPhone'] ?? '');
+                    $this->_send_whatsapp_expert_request($client_name, $client_phone);
+                    if ($call_id) {
+                        $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                            'ai_call_status'  => 'expert_requested',
+                            'ai_call_summary' => 'Client requested expert — WhatsApp sent to owner.',
+                        ]);
+                    }
+                    return; // early exit — no further processing needed for tool calls
+                }
+            }
+        }
 
         // Exact endedReason values that mean the human was never reached.
         $failed_reasons = [
@@ -953,18 +975,49 @@ class Ai_calling extends AdminController
     }
 
     /**
-     * Appends a session summary entry to the daily session log file.
+     * Sends a Telegram notification to the owner when a client requests an expert.
      *
-     * Log files are written to  module/ai_calling/logs/session_YYYY-MM-DD.log
-     * and are appended to (not overwritten) so multiple sessions per day are
-     * preserved. The logs/ directory is created if it does not exist.
+     * Setup: message @BotFather → /newbot → save token as AI_TELEGRAM_BOT_TOKEN.
+     * Owner opens the bot and sends /start, then visit:
+     * https://api.telegram.org/bot<TOKEN>/getUpdates to get the chat id.
+     * Save chat id as AI_TELEGRAM_CHAT_ID in config/vapi.php.
      *
-     * Each entry contains a timestamp, total/called/failed counts, and one
-     * line per lead showing "OK" or "ERR" with name, phone, and call ID / error.
-     *
-     * @param  array $stats  Session stats array as returned by _run_calling_session().
+     * @param  string $client_name   Client's name from the call.
+     * @param  string $client_phone  Client's phone number (E.164).
      * @return void
      */
+    private function _send_whatsapp_expert_request(string $client_name, string $client_phone): void
+    {
+        if (empty(AI_TELEGRAM_BOT_TOKEN) || AI_TELEGRAM_BOT_TOKEN === 'YOUR_BOT_TOKEN') {
+            return; // not configured yet
+        }
+
+        $time = date('d M, h:i A');
+        $text = "🔔 *নতুন Expert Request!*\n\n"
+              . "👤 Client: {$client_name}\n"
+              . "📞 Number: {$client_phone}\n"
+              . "🕐 Time: {$time}\n\n"
+              . "Client এখনই কথা বলতে চাইছেন।\nPlease call করুন।";
+
+        $url = 'https://api.telegram.org/bot' . AI_TELEGRAM_BOT_TOKEN . '/sendMessage';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode([
+                'chat_id'    => AI_TELEGRAM_CHAT_ID,
+                'text'       => $text,
+                'parse_mode' => 'Markdown',
+            ]),
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_SSL_VERIFYPEER => false,
+        ]);
+        curl_exec($ch);
+        curl_close($ch);
+    }
+
     private function _log_session(array $stats): void
     {
         $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
