@@ -958,6 +958,10 @@ class Ai_calling extends AdminController
                 'numberE164CheckEnabled' => false,
             ],
             'assistantOverrides' => [
+                // Speak immediately on pickup — no silence waiting for user to go first
+                'firstMessageMode'  => 'assistant-speaks-first',
+                // Skip voicemail detection (removes the ~4-5 s silent listen window)
+                'voicemailDetection' => ['enabled' => false],
                 'variableValues' => [
                     'leadName'  => $lead['name'],
                     'leadId'    => (string) $lead['id'],
