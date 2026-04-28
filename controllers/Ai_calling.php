@@ -147,6 +147,10 @@ class Ai_calling extends AdminController
      */
     public function notify_expert(): void
     {
+        // Read input BEFORE sending response (php://input closes after fastcgi_finish_request)
+        $raw  = file_get_contents('php://input');
+        $data = json_decode($raw, true) ?? [];
+
         // Respond immediately so Vapi doesn't wait
         ob_start();
         echo json_encode(['status' => 'ok']);
@@ -159,9 +163,6 @@ class Ai_calling extends AdminController
         if (function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
         }
-
-        $raw  = file_get_contents('php://input');
-        $data = json_decode($raw, true) ?? [];
 
         // Log the raw payload for debugging
         $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
