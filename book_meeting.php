@@ -8,9 +8,13 @@
  * Security: token query param must match the secret below.
  */
 
+// Start output buffer immediately
+@ob_start();
+
 // ── Security token check ────────────────────────────────────────────────────
 $token = $_GET['token'] ?? '';
 if ($token !== 'FormatDesign2026Secure') {
+    ob_end_clean();
     http_response_code(403);
     header('Content-Type: application/json');
     echo '{"status":"forbidden"}';
@@ -22,15 +26,26 @@ $raw  = file_get_contents('php://input');
 $data = json_decode($raw, true) ?? [];
 
 // ── Respond instantly so Vapi doesn't timeout ───────────────────────────────
+$resp = '{"status":"ok","message":"Meeting booked successfully."}';
+
+ob_end_clean();
 http_response_code(200);
 header('Content-Type: application/json');
 header('Connection: close');
-$resp = '{"status":"ok","message":"Meeting booked successfully."}';
 header('Content-Length: ' . strlen($resp));
 echo $resp;
-if (ob_get_level()) ob_end_flush();
+
+// Force flush to client before DB work
+@ob_end_flush();
+@ob_flush();
 flush();
-if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+if (function_exists('fastcgi_finish_request')) {
+    fastcgi_finish_request();
+} else {
+    // Fallback: ignore_user_abort keeps the script running after connection closes
+    ignore_user_abort(true);
+    set_time_limit(30);
+}
 
 // ── Everything below runs after Vapi gets its 200 OK ────────────────────────
 
