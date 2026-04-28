@@ -215,6 +215,91 @@ class Ai_calling extends AdminController
         }
     }
 
+    /**
+     * Dedicated endpoint for the bookMeeting Vapi API Request tool.
+     *
+     * Vapi calls this URL when the AI confirms a meeting booking with a client.
+     * Saves the booking to tblai_meeting_bookings and updates the lead status.
+     *
+     * @route  POST admin/ai_calling/book_meeting  (CSRF-excluded)
+     * @return void
+     */
+    public function book_meeting(): void
+    {
+        $raw  = file_get_contents('php://input');
+        $data = json_decode($raw, true) ?? [];
+
+        // Respond immediately so Vapi doesn't wait
+        $tool_call_id = $data['message']['toolCalls'][0]['id']
+            ?? $data['toolCallId']
+            ?? null;
+
+        $response = $tool_call_id
+            ? ['results' => [['toolCallId' => $tool_call_id, 'result' => 'Meeting booked successfully.']]]
+            : ['status' => 'ok'];
+
+        ob_start();
+        echo json_encode($response);
+        header('Connection: close');
+        header('Content-Length: ' . ob_get_length());
+        header('Content-Type: application/json');
+        ob_end_flush();
+        ob_flush();
+        flush();
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+
+        // Log raw payload
+        $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
+        if (!is_dir($log_dir)) @mkdir($log_dir, 0755, true);
+        file_put_contents(
+            $log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
+            '[' . date('Y-m-d H:i:s') . '] ' . $raw . "\n",
+            FILE_APPEND
+        );
+
+        // Extract tool arguments (clientName, clientPhone, meetingDetails)
+        $args = $data['message']['toolCalls'][0]['function']['arguments']
+            ?? $data['arguments']
+            ?? [];
+
+        $call         = $data['message']['call'] ?? $data['call'] ?? [];
+        $call_id      = $call['id'] ?? null;
+
+        $client_name  = $args['clientName']
+            ?? $call['customer']['name']
+            ?? 'Unknown';
+
+        $client_phone = $args['clientPhone']
+            ?? $call['customer']['number']
+            ?? '';
+
+        $meeting_notes = $args['meetingDetails'] ?? null;
+
+        // Resolve lead_id from DB using the call_id
+        $lead_row = $call_id ? $this->db->query(
+            "SELECT id, name, phonenumber FROM tblleads WHERE vapi_call_id = ?", [$call_id]
+        )->row_array() : [];
+
+        $lead_id    = (int) ($lead_row['id'] ?? 0);
+        $lead_name  = $lead_row['name']        ?? $client_name;
+        $lead_phone = $lead_row['phonenumber'] ?? $client_phone;
+
+        // Insert meeting booking record
+        $this->ai_calling_model->insert_meeting_booking(
+            $lead_id, $lead_name, $lead_phone, (string) $call_id, $meeting_notes
+        );
+
+        // Update lead status
+        if ($call_id) {
+            $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                'ai_call_status'  => 'meeting_booked',
+                'ai_call_summary' => 'Meeting booked — ' . ($meeting_notes ?? 'Client confirmed meeting.'),
+            ]);
+        }
+    }
+
     public function webhook(): void
     {
         $raw  = file_get_contents('php://input');
