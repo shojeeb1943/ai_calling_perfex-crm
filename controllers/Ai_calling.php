@@ -937,10 +937,11 @@ class Ai_calling extends AdminController
             ],
             'assistantOverrides' => [
                 'variableValues' => [
-                    'leadName' => $lead['name'],
-                    'leadId'   => (string) $lead['id'],
-                    'callTime' => date('Y-m-d H:i:s'),
-                    'context'  => $lead['ai_context_notes'] ?? '',
+                    'leadName'  => $lead['name'],
+                    'leadId'    => (string) $lead['id'],
+                    'callTime'  => date('Y-m-d H:i:s'),
+                    'context'   => $lead['ai_context_notes'] ?? '',
+                    'leadPhone' => $phone,
                 ],
             ],
         ];
