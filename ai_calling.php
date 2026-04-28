@@ -179,6 +179,22 @@ function ai_calling_module_init_menu_items(): void
         'icon'     => 'fa fa-phone',
         'position' => 12,
     ]);
+
+    $CI->app_menu->add_sidebar_children_item('ai-calling', [
+        'slug'     => 'ai-calling-dashboard',
+        'name'     => _l('ai_calling_dashboard'),
+        'href'     => admin_url('ai_calling'),
+        'icon'     => 'fa fa-tachometer',
+        'position' => 1,
+    ]);
+
+    $CI->app_menu->add_sidebar_children_item('ai-calling', [
+        'slug'     => 'ai-calling-meetings',
+        'name'     => _l('ai_calling_meetings'),
+        'href'     => admin_url('ai_calling/meetings'),
+        'icon'     => 'fa fa-calendar-check-o',
+        'position' => 2,
+    ]);
 }
 
 /**

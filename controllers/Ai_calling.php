@@ -60,6 +60,25 @@ class Ai_calling extends AdminController
     }
 
     /**
+     * Meeting bookings list page.
+     *
+     * @route  GET admin/ai_calling/meetings
+     * @return void  Renders ai_calling/meetings view.
+     */
+    public function meetings(): void
+    {
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            access_denied(AI_CALLING_MODULE_NAME);
+        }
+
+        $data['meetings']       = $this->ai_calling_model->get_all_meetings(200);
+        $data['meeting_stats']  = $this->ai_calling_model->get_meeting_stats();
+        $data['title']          = _l('ai_calling_meetings');
+
+        $this->load->view('ai_calling/meetings', $data);
+    }
+
+    /**
      * Triggers a calling session on demand and returns JSON.
      *
      * Called via AJAX from the "Start Calling Now" button on the dashboard.
@@ -317,6 +336,23 @@ class Ai_calling extends AdminController
                     || strpos($transcript, 'পরে যোগাযোগ') !== false
                 );
 
+                // ── Meeting booking keywords (English + Bangla) ───────────────
+                $is_meeting_booked = (
+                    strpos($lower, 'book a meeting') !== false
+                    || strpos($lower, 'schedule a meeting') !== false
+                    || strpos($lower, 'set up a meeting') !== false
+                    || strpos($lower, 'book an appointment') !== false
+                    || strpos($lower, 'schedule an appointment') !== false
+                    || strpos($lower, 'meeting booked') !== false
+                    || strpos($lower, 'appointment confirmed') !== false
+                    || strpos($transcript, 'মিটিং বুক') !== false
+                    || strpos($transcript, 'মিটিং নিশ্চিত') !== false
+                    || strpos($transcript, 'অ্যাপয়েন্টমেন্ট') !== false
+                    || strpos($transcript, 'মিটিং করব') !== false
+                    || strpos($transcript, 'দেখা করব') !== false
+                    || strpos($transcript, 'সাক্ষাৎ করব') !== false
+                );
+
                 // CRM lead status IDs (tblleads_status)
                 // 2 = FOLLOWUP CLIENT  |  8 = CLOSE CLIENT
                 $crm_status = null;
@@ -336,6 +372,19 @@ class Ai_calling extends AdminController
                     // Not interested → permanently close the lead, stop all calls
                     $status     = 'not_interested';
                     $crm_status = 8; // CLOSE CLIENT
+                } elseif ($is_meeting_booked) {
+                    // Client confirmed a meeting during the call → store booking record
+                    $status = 'meeting_booked';
+                    $lead_row     = $call_id ? $this->db->query(
+                        "SELECT id, phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]
+                    )->row_array() : [];
+                    $book_lead_id = (int) ($lead_row['id'] ?? 0);
+                    $book_name    = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
+                    $book_phone   = $lead_row['phonenumber'] ?? ($call['customer']['number'] ?? '');
+                    $this->ai_calling_model->insert_meeting_booking(
+                        $book_lead_id, $book_name, $book_phone, $call_id,
+                        mb_substr($transcript, 0, 1000)
+                    );
                 } elseif ($is_expert_request) {
                     // Client requested human expert — notify owner via Telegram
                     $status = 'expert_requested';
@@ -428,6 +477,32 @@ class Ai_calling extends AdminController
             } else {
                 $skipped[] = $col;
             }
+        }
+
+        // Also create the meetings table if it doesn't exist
+        $meetings_table = $this->db->query(
+            "SELECT COUNT(*) AS cnt FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tblai_meeting_bookings'"
+        )->row()->cnt;
+
+        if (!$meetings_table) {
+            $this->db->query("
+                CREATE TABLE `tblai_meeting_bookings` (
+                    `id`          INT(11)      NOT NULL AUTO_INCREMENT,
+                    `lead_id`     INT(11)      DEFAULT NULL,
+                    `lead_name`   VARCHAR(255) NOT NULL DEFAULT '',
+                    `lead_phone`  VARCHAR(50)  NOT NULL DEFAULT '',
+                    `vapi_call_id` VARCHAR(100) DEFAULT NULL,
+                    `booking_notes` TEXT       DEFAULT NULL,
+                    `created_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    KEY `idx_lead_id` (`lead_id`),
+                    KEY `idx_created_at` (`created_at`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ");
+            $added[] = 'tblai_meeting_bookings (table)';
+        } else {
+            $skipped[] = 'tblai_meeting_bookings (table)';
         }
 
         echo json_encode([

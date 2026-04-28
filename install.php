@@ -83,6 +83,33 @@ foreach ($columns as $col => $definition) {
     }
 }
 
+// ─── Meeting bookings table ───────────────────────────────────────────────────
+
+$table_exists = $CI->db->query(
+    "SELECT COUNT(*) AS cnt
+     FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME   = 'tblai_meeting_bookings'"
+)->row()->cnt;
+
+if (!$table_exists) {
+    $CI->db->query("
+        CREATE TABLE `tblai_meeting_bookings` (
+            `id`          INT(11)      NOT NULL AUTO_INCREMENT,
+            `lead_id`     INT(11)      DEFAULT NULL,
+            `lead_name`   VARCHAR(255) NOT NULL DEFAULT '',
+            `lead_phone`  VARCHAR(50)  NOT NULL DEFAULT '',
+            `vapi_call_id` VARCHAR(100) DEFAULT NULL,
+            `booking_notes` TEXT       DEFAULT NULL,
+            `created_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `idx_lead_id` (`lead_id`),
+            KEY `idx_created_at` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+    log_message('info', '[ai_calling] Created table tblai_meeting_bookings');
+}
+
 // ─── Logs directory ───────────────────────────────────────────────────────────
 
 /**

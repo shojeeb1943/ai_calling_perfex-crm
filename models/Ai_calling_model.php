@@ -235,6 +235,64 @@ class Ai_calling_model extends App_Model
      * @param  bool   $refund_count  True for SIP errors — refunds followup_count.
      * @return void
      */
+    // ─── Meeting bookings ─────────────────────────────────────────────────────
+
+    /**
+     * Inserts a meeting booking record when a lead books during a call.
+     *
+     * @param  int         $lead_id      Primary key of the lead (0 if unresolved).
+     * @param  string      $lead_name    Display name from the CRM / Vapi payload.
+     * @param  string      $lead_phone   Phone number.
+     * @param  string      $vapi_call_id Vapi call UUID.
+     * @param  string|null $notes        Transcript excerpt or AI summary.
+     * @return int                       Inserted row ID.
+     */
+    public function insert_meeting_booking(int $lead_id, string $lead_name, string $lead_phone, string $vapi_call_id, ?string $notes = null): int
+    {
+        $this->db->insert('tblai_meeting_bookings', [
+            'lead_id'       => $lead_id ?: null,
+            'lead_name'     => $lead_name,
+            'lead_phone'    => $lead_phone,
+            'vapi_call_id'  => $vapi_call_id,
+            'booking_notes' => $notes ? mb_substr($notes, 0, 1000) : null,
+            'created_at'    => date('Y-m-d H:i:s'),
+        ]);
+        return (int) $this->db->insert_id();
+    }
+
+    /**
+     * Returns all meeting bookings, newest first.
+     *
+     * @param  int $limit Max rows to return.
+     * @return array
+     */
+    public function get_all_meetings(int $limit = 200): array
+    {
+        $this->db->select('m.*, l.id AS crm_lead_id');
+        $this->db->from('tblai_meeting_bookings m');
+        $this->db->join('tblleads l', 'l.id = m.lead_id', 'left');
+        $this->db->order_by('m.created_at', 'DESC');
+        $this->db->limit($limit);
+        return $this->db->get()->result_array();
+    }
+
+    /**
+     * Returns total and today's meeting booking counts.
+     *
+     * @return array<string, int>  Keys: total, today.
+     */
+    public function get_meeting_stats(): array
+    {
+        $today = date('Y-m-d');
+        return [
+            'total' => $this->db->count_all('tblai_meeting_bookings'),
+            'today' => $this->db
+                ->where('DATE(created_at)', $today)
+                ->get('tblai_meeting_bookings')
+                ->num_rows(),
+        ];
+    }
+
     public function mark_lead_failed(string $vapi_call_id, string $reason, bool $refund_count = false): void
     {
         $fields = [

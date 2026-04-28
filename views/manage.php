@@ -340,6 +340,8 @@
                                                 'not_interested'     => ['label' => 'Not Interested',   'class' => 'danger'],
                                                 'callback_scheduled' => ['label' => 'Callback',         'class' => 'info'],
                                                 'failed'             => ['label' => 'Failed',           'class' => 'danger'],
+                                                'expert_requested'   => ['label' => 'Expert Req.',      'class' => 'warning'],
+                                                'meeting_booked'     => ['label' => 'Meeting Booked',   'class' => 'success'],
                                             ];
                                             $s = $status_map[$call['ai_call_status']] ?? ['label' => ucfirst($call['ai_call_status']), 'class' => 'default'];
                                             ?>
