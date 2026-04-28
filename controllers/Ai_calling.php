@@ -321,10 +321,28 @@ class Ai_calling extends AdminController
                 // 2 = FOLLOWUP CLIENT  |  8 = CLOSE CLIENT
                 $crm_status = null;
 
+                // ── Expert request keywords (English + Bangla) ───────────────
+                $is_expert_request = (
+                    strpos($lower, 'expert') !== false
+                    || strpos($lower, 'manager') !== false
+                    || strpos($lower, 'human') !== false
+                    || strpos($transcript, 'এক্সপার্ট') !== false
+                    || strpos($transcript, 'ম্যানেজার') !== false
+                    || strpos($transcript, 'কাউকে দিন') !== false
+                    || strpos($transcript, 'মানুষের সাথে') !== false
+                );
+
                 if ($is_not_interested) {
                     // Not interested → permanently close the lead, stop all calls
                     $status     = 'not_interested';
                     $crm_status = 8; // CLOSE CLIENT
+                } elseif ($is_expert_request) {
+                    // Client requested human expert — notify owner via Telegram
+                    $status = 'expert_requested';
+                    $this->_send_whatsapp_expert_request(
+                        $call['customer']['name']   ?? 'Unknown',
+                        $call['customer']['number'] ?? ''
+                    );
                 } elseif ($is_interested) {
                     // Interested → move to FOLLOWUP CLIENT queue, schedule next call
                     $status     = 'callback_scheduled';
