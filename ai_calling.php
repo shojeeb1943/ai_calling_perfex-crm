@@ -116,6 +116,8 @@ function ai_calling_csrf_exclude_uris(array $exclude_uris): array
 {
     $exclude_uris[] = 'ai_calling/webhook';
     $exclude_uris[] = 'admin/ai_calling/webhook';
+    $exclude_uris[] = 'ai_calling/notify_expert';
+    $exclude_uris[] = 'admin/ai_calling/notify_expert';
     return $exclude_uris;
 }
 

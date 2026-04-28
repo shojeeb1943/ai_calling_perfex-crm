@@ -135,6 +135,66 @@ class Ai_calling extends AdminController
      * @route  POST admin/ai_calling/webhook  (CSRF-excluded)
      * @return void  Outputs HTTP 200 + JSON { status: "received" }, or 400 on invalid payload.
      */
+    /**
+     * Dedicated endpoint for the notifyExpert Vapi API Request tool.
+     *
+     * Vapi calls this URL directly when the AI triggers the notifyExpert tool.
+     * Accepts any payload format, extracts client info, sends Telegram notification,
+     * and returns a 200 response immediately.
+     *
+     * @route  POST admin/ai_calling/notify_expert  (CSRF-excluded)
+     * @return void
+     */
+    public function notify_expert(): void
+    {
+        // Respond immediately so Vapi doesn't wait
+        ob_start();
+        echo json_encode(['status' => 'ok']);
+        header('Connection: close');
+        header('Content-Length: ' . ob_get_length());
+        header('Content-Type: application/json');
+        ob_end_flush();
+        ob_flush();
+        flush();
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+
+        $raw  = file_get_contents('php://input');
+        $data = json_decode($raw, true) ?? [];
+
+        // Log the raw payload for debugging
+        $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
+        if (!is_dir($log_dir)) @mkdir($log_dir, 0755, true);
+        file_put_contents(
+            $log_dir . 'notify_expert_' . date('Y-m-d') . '.log',
+            '[' . date('Y-m-d H:i:s') . '] ' . $raw . "\n",
+            FILE_APPEND
+        );
+
+        // Extract client info from any possible payload structure
+        $client_name  = $data['clientName']
+            ?? $data['message']['call']['customer']['name']
+            ?? $data['call']['customer']['name']
+            ?? 'Unknown';
+
+        $client_phone = $data['clientPhone']
+            ?? $data['message']['call']['customer']['number']
+            ?? $data['call']['customer']['number']
+            ?? '';
+
+        $this->_send_whatsapp_expert_request($client_name, $client_phone);
+
+        // Update lead status if call_id is available
+        $call_id = $data['message']['call']['id'] ?? $data['call']['id'] ?? null;
+        if ($call_id) {
+            $this->ai_calling_model->update_lead_from_webhook($call_id, [
+                'ai_call_status'  => 'expert_requested',
+                'ai_call_summary' => 'Client requested expert — Telegram notification sent.',
+            ]);
+        }
+    }
+
     public function webhook(): void
     {
         $raw  = file_get_contents('php://input');
