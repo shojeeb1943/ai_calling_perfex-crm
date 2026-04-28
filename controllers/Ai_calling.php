@@ -339,10 +339,13 @@ class Ai_calling extends AdminController
                 } elseif ($is_expert_request) {
                     // Client requested human expert — notify owner via Telegram
                     $status = 'expert_requested';
-                    $this->_send_whatsapp_expert_request(
-                        $call['customer']['name']   ?? 'Unknown',
-                        $call['customer']['number'] ?? ''
-                    );
+                    // Look up real phone from DB (Vapi payload may have unresolved variables)
+                    $lead_row     = $call_id ? $this->db->query(
+                        "SELECT phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]
+                    )->row_array() : [];
+                    $notify_name  = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
+                    $notify_phone = $lead_row['phonenumber']  ?? ($call['customer']['number'] ?? '');
+                    $this->_send_whatsapp_expert_request($notify_name, $notify_phone);
                 } elseif ($is_interested) {
                     // Interested → move to FOLLOWUP CLIENT queue, schedule next call
                     $status     = 'callback_scheduled';
@@ -475,10 +478,11 @@ class Ai_calling extends AdminController
             ],
             'assistantOverrides' => [
                 'variableValues' => [
-                    'leadName' => 'Test Call',
-                    'leadId'   => '0',
-                    'callTime' => date('Y-m-d H:i:s'),
-                    'context'  => 'এটি একটি টেস্ট কল — calling provider যাচাই করা হচ্ছে।',
+                    'leadName'  => 'Test Call',
+                    'leadId'    => '0',
+                    'callTime'  => date('Y-m-d H:i:s'),
+                    'leadPhone' => $phone,
+                    'context'   => 'এটি একটি টেস্ট কল — calling provider যাচাই করা হচ্ছে।',
                 ],
             ],
         ];
