@@ -1234,7 +1234,10 @@ class Ai_calling extends AdminController
         }
 
         $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
-        return ['success' => false, 'error' => $err];
+        if (is_array($err)) {
+            $err = implode('; ', $err);
+        }
+        return ['success' => false, 'error' => (string) $err];
     }
 
     /**
