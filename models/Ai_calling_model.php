@@ -73,7 +73,8 @@ class Ai_calling_model extends App_Model
         $this->db->where_in('status', $this->callable_statuses);
         $this->db->where('phonenumber !=', '');
         $this->db->where('phonenumber IS NOT NULL', null, false);
-        $this->db->where('followup_count <', AI_MAX_FOLLOWUPS);
+        $max_followups = (int)(get_option('ai_calling_max_followups') ?: AI_MAX_FOLLOWUPS);
+        $this->db->where('followup_count <', $max_followups);
 
         // pending OR failed (retry) OR (callback due today or earlier)
         $this->db->group_start();
@@ -189,7 +190,7 @@ class Ai_calling_model extends App_Model
             'ai_call_status'     => 'called',
             'vapi_call_id'       => $call_id,
             'last_ai_call'       => date('Y-m-d H:i:s'),
-            'next_followup_date' => date('Y-m-d', strtotime('+' . AI_FOLLOWUP_DAYS . ' days')),
+            'next_followup_date' => date('Y-m-d', strtotime('+' . (int)(get_option('ai_calling_followup_days') ?: AI_FOLLOWUP_DAYS) . ' days')),
             'followup_count'     => $new_count,
         ]);
     }
@@ -268,12 +269,21 @@ class Ai_calling_model extends App_Model
      */
     public function get_all_meetings(int $limit = 200): array
     {
-        $this->db->select('m.*, l.id AS crm_lead_id, l.ai_call_summary AS lead_transcript, l.call_recording_url AS lead_recording_url');
-        $this->db->from('tblai_meeting_bookings m');
-        $this->db->join('tblleads l', 'l.id = m.lead_id', 'left');
-        $this->db->order_by('m.created_at', 'DESC');
-        $this->db->limit($limit);
-        return $this->db->get()->result_array();
+        // l1 = match by stored lead_id; l2 = phone-number fallback when lead_id is NULL
+        $sql = "
+            SELECT
+                m.*,
+                COALESCE(l1.id,                  l2.id)                  AS crm_lead_id,
+                COALESCE(l1.ai_call_summary,      l2.ai_call_summary)     AS lead_transcript,
+                COALESCE(l1.call_recording_url,   l2.call_recording_url)  AS lead_recording_url
+            FROM  tblai_meeting_bookings m
+            LEFT JOIN tblleads l1 ON l1.id          = m.lead_id
+            LEFT JOIN tblleads l2 ON l2.phonenumber = m.lead_phone
+                                 AND m.lead_id IS NULL
+            ORDER BY m.created_at DESC
+            LIMIT ?
+        ";
+        return $this->db->query($sql, [(int) $limit])->result_array();
     }
 
     /**

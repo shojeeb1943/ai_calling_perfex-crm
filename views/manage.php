@@ -238,10 +238,11 @@
                             <div class="col-md-8">
                                 <h4 class="no-margin">Start Calling Session</h4>
                                 <p class="text-muted" style="margin-bottom:0;">
-                                    Calls up to <strong><?php echo AI_MAX_CALLS_PER_RUN; ?></strong> pending leads now via
+                                    Calls up to <strong><?php echo $setting_max_per_run; ?></strong> pending leads now via
                                     <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip SIP'; ?></strong>.
-                                    Max <strong><?php echo AI_MAX_FOLLOWUPS; ?></strong> attempts per lead,
-                                    followup in <strong><?php echo AI_FOLLOWUP_DAYS; ?></strong> days.
+                                    Max <strong><?php echo $setting_max_followups; ?></strong> attempts per lead,
+                                    followup in <strong><?php echo $setting_followup_days; ?></strong> days.
+                                    Calling hours: <strong><?php echo $setting_hour_start; ?>:00–<?php echo $setting_hour_end; ?>:00</strong>.
                                 </p>
                             </div>
                             <div class="col-md-4 text-right">
@@ -262,6 +263,72 @@
                     </div>
                 </div>
 
+                <!-- ── Calling Settings ─────────────────────────────────── -->
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h4 class="panel-title">
+                            <i class="fa fa-cog"></i> Calling Settings
+                        </h4>
+                    </div>
+                    <div class="panel-body">
+                        <form id="form-settings">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label>Calling Hours (24-hour)</label>
+                                        <div class="input-group">
+                                            <span class="input-group-addon">Start</span>
+                                            <input type="number" name="hour_start" class="form-control" min="0" max="23"
+                                                   value="<?php echo $setting_hour_start; ?>" />
+                                            <span class="input-group-addon">End</span>
+                                            <input type="number" name="hour_end" class="form-control" min="1" max="24"
+                                                   value="<?php echo $setting_hour_end; ?>" />
+                                        </div>
+                                        <small class="text-muted">Cron calls are skipped outside this window. End is exclusive (22 = until 21:59).</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="form-group">
+                                        <label>Max calls per session</label>
+                                        <input type="number" name="max_per_run" class="form-control" min="1" max="200"
+                                               value="<?php echo $setting_max_per_run; ?>" />
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="form-group">
+                                        <label>Delay between calls (sec)</label>
+                                        <input type="number" name="delay_sec" class="form-control" min="0" max="120"
+                                               value="<?php echo $setting_delay_sec; ?>" />
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-3">
+                                    <div class="form-group">
+                                        <label>Follow-up after (days)</label>
+                                        <input type="number" name="followup_days" class="form-control" min="1" max="365"
+                                               value="<?php echo $setting_followup_days; ?>" />
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="form-group">
+                                        <label>Max attempts per lead</label>
+                                        <input type="number" name="max_followups" class="form-control" min="1" max="20"
+                                               value="<?php echo $setting_max_followups; ?>" />
+                                    </div>
+                                </div>
+                                <div class="col-md-6 text-right" style="padding-top:25px;">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fa fa-save"></i> Save Settings
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="settings-alert" style="display:none;" class="alert"></div>
+                        </form>
+                    </div>
+                </div>
+                <!-- /calling settings -->
+
                 <!-- ── Cron / Webhook info ───────────────────────────────── -->
                 <div class="panel panel-default">
                     <div class="panel-heading">
@@ -271,7 +338,7 @@
                         <p><strong>Hostinger Cron URL</strong> (set to run daily at 9:00 AM):</p>
                         <div class="input-group">
                             <input type="text" class="form-control" id="cron-url"
-                                   value="<?php echo base_url('admin/ai_calling/cron/VapiCron2024Secure'); ?>"
+                                   value="<?php echo base_url('admin/ai_calling/cron/' . AI_CRON_TOKEN); ?>"
                                    readonly />
                             <span class="input-group-btn">
                                 <button class="btn btn-default" onclick="copyCronUrl()">
@@ -500,6 +567,42 @@ document.getElementById('btn-test-call').addEventListener('click', function () {
     .finally(function () {
         btn.disabled  = false;
         btn.innerHTML = '<i class="fa fa-phone"></i> Call Now<small style="display:block;font-size:10px;font-weight:normal;">via <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?></strong></small>';
+    });
+});
+
+// ── Settings form ─────────────────────────────────────────────────────────────
+document.getElementById('form-settings').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var form  = this;
+    var alert = document.getElementById('settings-alert');
+    var btn   = form.querySelector('button[type=submit]');
+
+    btn.disabled   = true;
+    btn.innerHTML  = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+    alert.style.display = 'none';
+
+    var fd = new FormData(form);
+    fd.append('<?php echo $this->security->get_csrf_token_name(); ?>', '<?php echo $this->security->get_csrf_hash(); ?>');
+
+    fetch('<?php echo admin_url('ai_calling/save_settings'); ?>', {
+        method : 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body   : fd
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        alert.style.display = 'block';
+        alert.className     = data.success ? 'alert alert-success' : 'alert alert-danger';
+        alert.innerHTML     = data.message;
+    })
+    .catch(function (err) {
+        alert.style.display = 'block';
+        alert.className     = 'alert alert-danger';
+        alert.innerHTML     = 'Error: ' + err.message;
+    })
+    .finally(function () {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fa fa-save"></i> Save Settings';
     });
 });
 

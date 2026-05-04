@@ -56,6 +56,13 @@ class Ai_calling extends AdminController
         $data['active_provider'] = get_option('ai_calling_provider') ?: 'amarip';
         $data['title']           = _l('ai_calling_dashboard');
 
+        $data['setting_hour_start']   = (int)(get_option('ai_calling_hour_start') ?: AI_CALLING_HOUR_START);
+        $data['setting_hour_end']     = (int)(get_option('ai_calling_hour_end')   ?: AI_CALLING_HOUR_END);
+        $data['setting_max_per_run']  = (int)(get_option('ai_calling_max_per_run')  ?: AI_MAX_CALLS_PER_RUN);
+        $data['setting_delay_sec']    = (int)(get_option('ai_calling_delay_sec')    ?: AI_CALL_DELAY_SEC);
+        $data['setting_followup_days']= (int)(get_option('ai_calling_followup_days') ?: AI_FOLLOWUP_DAYS);
+        $data['setting_max_followups']= (int)(get_option('ai_calling_max_followups') ?: AI_MAX_FOLLOWUPS);
+
         $this->load->view('ai_calling/manage', $data);
     }
 
@@ -119,10 +126,11 @@ class Ai_calling extends AdminController
             die('Forbidden');
         }
 
-        // Only place calls between 10:00 AM and 10:00 PM (hour 10–21 inclusive)
-        $hour = (int) date('H');
-        if ($hour < 10 || $hour >= 22) {
-            echo "Skipped: outside calling hours (10 AM – 10 PM). Current hour: {$hour}.\n";
+        $hour_start = (int)(get_option('ai_calling_hour_start') ?: AI_CALLING_HOUR_START);
+        $hour_end   = (int)(get_option('ai_calling_hour_end')   ?: AI_CALLING_HOUR_END);
+        $hour       = (int) date('H');
+        if ($hour < $hour_start || $hour >= $hour_end) {
+            echo "Skipped: outside calling hours ({$hour_start}:00–{$hour_end}:00). Current hour: {$hour}.\n";
             return;
         }
 
@@ -746,6 +754,43 @@ class Ai_calling extends AdminController
     }
 
     /**
+     * Saves calling behaviour settings from the dashboard form.
+     *
+     * @route  POST admin/ai_calling/save_settings
+     * @return void  Outputs JSON: { success, message }
+     */
+    public function save_settings(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $hour_start    = (int) $this->input->post('hour_start');
+        $hour_end      = (int) $this->input->post('hour_end');
+        $max_per_run   = (int) $this->input->post('max_per_run');
+        $delay_sec     = (int) $this->input->post('delay_sec');
+        $followup_days = (int) $this->input->post('followup_days');
+        $max_followups = (int) $this->input->post('max_followups');
+
+        if ($hour_start < 0 || $hour_start > 23 || $hour_end < 1 || $hour_end > 24 || $hour_start >= $hour_end) {
+            echo json_encode(['success' => false, 'message' => 'Hour start must be before hour end (0–23 / 1–24).']);
+            return;
+        }
+
+        update_option('ai_calling_hour_start',   $hour_start);
+        update_option('ai_calling_hour_end',     $hour_end);
+        update_option('ai_calling_max_per_run',  max(1, $max_per_run));
+        update_option('ai_calling_delay_sec',    max(0, $delay_sec));
+        update_option('ai_calling_followup_days', max(1, $followup_days));
+        update_option('ai_calling_max_followups', max(1, $max_followups));
+
+        echo json_encode(['success' => true, 'message' => 'Settings saved.']);
+    }
+
+    /**
      * Resets all "called" leads from today that have no transcript back to
      * "pending" so they can be retried immediately.
      *
@@ -1055,7 +1100,9 @@ class Ai_calling extends AdminController
             'log'     => [],
         ];
 
-        $leads          = $this->ai_calling_model->get_leads_to_call(AI_MAX_CALLS_PER_RUN);
+        $max_per_run    = (int)(get_option('ai_calling_max_per_run') ?: AI_MAX_CALLS_PER_RUN);
+        $delay_sec      = (int)(get_option('ai_calling_delay_sec')  ?: AI_CALL_DELAY_SEC);
+        $leads          = $this->ai_calling_model->get_leads_to_call($max_per_run);
         $stats['total'] = count($leads);
 
         if (empty($leads)) {
@@ -1081,7 +1128,7 @@ class Ai_calling extends AdminController
                 $stats['log'][] = "ERR | {$lead['name']} | {$lead['phonenumber']} | {$result['error']}";
             }
 
-            sleep(AI_CALL_DELAY_SEC);
+            sleep($delay_sec);
         }
 
         $this->_log_session($stats);

@@ -86,6 +86,12 @@ if (!defined('AI_VAPI_TWILIO_PHONE_ID')) {
 /** @var string Full URL for the Vapi outbound-call endpoint. */
 define('AI_VAPI_API_URL', 'https://api.vapi.ai/call/phone');
 
+/** @var int Earliest hour (24 h) at which outbound calls are placed. Default 10 = 10:00 AM. */
+define('AI_CALLING_HOUR_START', 10);
+
+/** @var int Hour at which calling stops (exclusive). Default 22 = 10:00 PM. */
+define('AI_CALLING_HOUR_END', 22);
+
 /** @var int Maximum number of leads to call in a single cron/manual session. */
 define('AI_MAX_CALLS_PER_RUN', 2);
 
