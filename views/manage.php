@@ -409,12 +409,15 @@ document.getElementById('btn-start-calling').addEventListener('click', function 
     .then(function (data) {
         result.style.display = 'block';
 
-        if (data.called > 0 || data.total === 0) {
+        if (data.called > 0) {
             alert.className = 'alert alert-success';
             alert.innerHTML = '<strong>Done!</strong> Called: ' + data.called +
                               ' | Failed: ' + data.failed +
                               ' | Total: ' + data.total +
                               (data.message ? ' — ' + data.message : '');
+        } else if (data.total === 0 && !data.message) {
+            alert.className = 'alert alert-info';
+            alert.innerHTML = '<strong>No leads</strong> pending to call right now.';
         } else {
             alert.className = 'alert alert-warning';
             alert.innerHTML = '<strong>Warning:</strong> ' + (data.message || 'Check logs for details.');

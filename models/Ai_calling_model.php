@@ -268,7 +268,7 @@ class Ai_calling_model extends App_Model
      */
     public function get_all_meetings(int $limit = 200): array
     {
-        $this->db->select('m.*, l.id AS crm_lead_id');
+        $this->db->select('m.*, l.id AS crm_lead_id, l.ai_call_summary AS lead_transcript, l.call_recording_url AS lead_recording_url');
         $this->db->from('tblai_meeting_bookings m');
         $this->db->join('tblleads l', 'l.id = m.lead_id', 'left');
         $this->db->order_by('m.created_at', 'DESC');

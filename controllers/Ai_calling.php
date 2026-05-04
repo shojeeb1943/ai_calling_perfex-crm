@@ -119,6 +119,13 @@ class Ai_calling extends AdminController
             die('Forbidden');
         }
 
+        // Only place calls between 10:00 AM and 10:00 PM (hour 10–21 inclusive)
+        $hour = (int) date('H');
+        if ($hour < 10 || $hour >= 22) {
+            echo "Skipped: outside calling hours (10 AM – 10 PM). Current hour: {$hour}.\n";
+            return;
+        }
+
         $result = $this->_run_calling_session();
 
         echo "=== AI Calling Session ===\n";
@@ -1047,13 +1054,6 @@ class Ai_calling extends AdminController
             'failed'  => 0,
             'log'     => [],
         ];
-
-        // Only place calls between 10:00 AM and 10:00 PM (hour 10–21 inclusive)
-        $hour = (int) date('H');
-        if ($hour < 10 || $hour >= 22) {
-            $stats['message'] = 'Outside calling hours (10 AM – 10 PM). Skipping.';
-            return $stats;
-        }
 
         $leads          = $this->ai_calling_model->get_leads_to_call(AI_MAX_CALLS_PER_RUN);
         $stats['total'] = count($leads);
