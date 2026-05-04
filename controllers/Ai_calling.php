@@ -697,11 +697,14 @@ class Ai_calling extends AdminController
             ]);
         } else {
             $err = $body['message'] ?? $body['error'] ?? ("HTTP {$http_code}: {$response}");
+            if (is_array($err)) {
+                $err = implode('; ', $err);
+            }
             echo json_encode([
                 'success'  => false,
                 'provider' => $provider,
                 'phone'    => $phone,
-                'message'  => $err,
+                'message'  => (string) $err,
                 'raw'      => $body,
             ]);
         }
