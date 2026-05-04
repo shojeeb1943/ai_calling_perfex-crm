@@ -43,6 +43,32 @@ class Ai_calling_model extends App_Model
     public function __construct()
     {
         parent::__construct();
+        $this->_ensure_meetings_table();
+    }
+
+    private function _ensure_meetings_table(): void
+    {
+        $exists = $this->db->query(
+            "SELECT COUNT(*) AS cnt FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tblai_meeting_bookings'"
+        )->row()->cnt;
+
+        if (!$exists) {
+            $this->db->query("
+                CREATE TABLE `tblai_meeting_bookings` (
+                    `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+                    `lead_id`       INT(11)      DEFAULT NULL,
+                    `lead_name`     VARCHAR(255) NOT NULL DEFAULT '',
+                    `lead_phone`    VARCHAR(50)  NOT NULL DEFAULT '',
+                    `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
+                    `booking_notes` TEXT         DEFAULT NULL,
+                    `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    KEY `idx_lead_id` (`lead_id`),
+                    KEY `idx_created_at` (`created_at`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ");
+        }
     }
 
     // ─── Read ─────────────────────────────────────────────────────────────────
