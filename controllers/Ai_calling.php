@@ -1048,6 +1048,13 @@ class Ai_calling extends AdminController
             'log'     => [],
         ];
 
+        // Only place calls between 10:00 AM and 10:00 PM (hour 10–21 inclusive)
+        $hour = (int) date('H');
+        if ($hour < 10 || $hour >= 22) {
+            $stats['message'] = 'Outside calling hours (10 AM – 10 PM). Skipping.';
+            return $stats;
+        }
+
         $leads          = $this->ai_calling_model->get_leads_to_call(AI_MAX_CALLS_PER_RUN);
         $stats['total'] = count($leads);
 
