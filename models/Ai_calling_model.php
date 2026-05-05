@@ -43,7 +43,12 @@ class Ai_calling_model extends App_Model
     public function __construct()
     {
         parent::__construct();
-        $this->_ensure_meetings_table();
+        try {
+            $this->_ensure_meetings_table();
+        } catch (\Throwable $e) {
+            // Never let table provisioning crash the page — the meetings()
+            // controller has its own degradation path.
+        }
     }
 
     private function _ensure_meetings_table(): void
@@ -51,6 +56,10 @@ class Ai_calling_model extends App_Model
         // Always run CREATE TABLE IF NOT EXISTS — never use table_exists() as a
         // gate here because CI3's schema library can lie (prefix bugs, cached
         // SHOW TABLES result). IF NOT EXISTS is idempotent and safe.
+        //
+        // NOTE: TEXT columns intentionally have no DEFAULT clause — older MySQL
+        // strict modes (e.g. 5.7) reject `TEXT DEFAULT NULL` and would 500 the
+        // whole module on every model load.
         $charset   = $this->db->char_set ?: 'utf8';
         $old_debug = $this->db->db_debug;
         $this->db->db_debug = false;
@@ -61,7 +70,7 @@ class Ai_calling_model extends App_Model
                 `lead_name`     VARCHAR(255) NOT NULL DEFAULT '',
                 `lead_phone`    VARCHAR(50)  NOT NULL DEFAULT '',
                 `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
-                `booking_notes` TEXT         DEFAULT NULL,
+                `booking_notes` TEXT         NULL,
                 `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_lead_id` (`lead_id`),
@@ -295,48 +304,66 @@ class Ai_calling_model extends App_Model
         // can be tricked by prefix bugs or a stale schema-library cache.
         $old_debug = $this->db->db_debug;
         $this->db->db_debug = false;
+        $limit = max(1, (int) $limit);
 
-        $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
-        if (!$chk || $chk->num_rows() === 0) {
+        try {
+            $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
+            if (!$chk || $chk->num_rows() === 0) {
+                $this->db->db_debug = $old_debug;
+                return [];
+            }
+
+            // Discover which optional tblleads columns are present so the JOIN
+            // never references missing columns (would otherwise 500).
+            $has_summary   = $this->db->field_exists('ai_call_summary',    'tblleads');
+            $has_recording = $this->db->field_exists('call_recording_url', 'tblleads');
+
+            $summary_expr   = $has_summary
+                ? 'COALESCE(l1.ai_call_summary, l2.ai_call_summary)'
+                : 'NULL';
+            $recording_expr = $has_recording
+                ? 'COALESCE(l1.call_recording_url, l2.call_recording_url)'
+                : 'NULL';
+
+            // Inline the integer limit — MySQL servers in some configurations
+            // refuse `LIMIT ?` even with CI3's bind substitution.
+            $sql = "
+                SELECT
+                    m.*,
+                    COALESCE(l1.id, l2.id) AS crm_lead_id,
+                    {$summary_expr}        AS lead_transcript,
+                    {$recording_expr}      AS lead_recording_url
+                FROM  tblai_meeting_bookings m
+                LEFT JOIN tblleads l1
+                       ON l1.id = m.lead_id
+                LEFT JOIN tblleads l2
+                       ON l2.phonenumber = m.lead_phone
+                      AND m.lead_id IS NULL
+                ORDER BY m.created_at DESC
+                LIMIT {$limit}
+            ";
+
+            $query = $this->db->query($sql);
             $this->db->db_debug = $old_debug;
-            return [];
+            return $query ? $query->result_array() : [];
+        } catch (\Throwable $e) {
+            // Last-ditch fallback: try the simplest possible query so the page
+            // always renders even if the JOIN exploded.
+            try {
+                $q = $this->db->query("SELECT * FROM tblai_meeting_bookings ORDER BY created_at DESC LIMIT {$limit}");
+                $this->db->db_debug = $old_debug;
+                $rows = $q ? $q->result_array() : [];
+                foreach ($rows as &$r) {
+                    $r['crm_lead_id']        = $r['lead_id'] ?? null;
+                    $r['lead_transcript']    = null;
+                    $r['lead_recording_url'] = null;
+                }
+                return $rows;
+            } catch (\Throwable $e2) {
+                $this->db->db_debug = $old_debug;
+                return [];
+            }
         }
-
-        // Check whether the extra tblleads columns exist (added by install.php migration).
-        // field_exists() runs DESCRIBE — safe even if columns are missing.
-        $has_summary   = $this->db->field_exists('ai_call_summary',    'tblleads');
-        $has_recording = $this->db->field_exists('call_recording_url', 'tblleads');
-
-        if ($has_summary && $has_recording) {
-            $sql = "
-                SELECT
-                    m.*,
-                    COALESCE(l1.id,                  l2.id)                  AS crm_lead_id,
-                    COALESCE(l1.ai_call_summary,      l2.ai_call_summary)     AS lead_transcript,
-                    COALESCE(l1.call_recording_url,   l2.call_recording_url)  AS lead_recording_url
-                FROM  tblai_meeting_bookings m
-                LEFT JOIN tblleads l1 ON l1.id          = m.lead_id
-                LEFT JOIN tblleads l2 ON l2.phonenumber = m.lead_phone
-                                     AND m.lead_id IS NULL
-                ORDER BY m.created_at DESC
-                LIMIT ?
-            ";
-        } else {
-            $sql = "
-                SELECT
-                    m.*,
-                    m.lead_id AS crm_lead_id,
-                    NULL      AS lead_transcript,
-                    NULL      AS lead_recording_url
-                FROM  tblai_meeting_bookings m
-                ORDER BY m.created_at DESC
-                LIMIT ?
-            ";
-        }
-
-        $query = $this->db->query($sql, [(int) $limit]);
-        $this->db->db_debug = $old_debug;
-        return $query ? $query->result_array() : [];
     }
 
     /**
@@ -349,24 +376,29 @@ class Ai_calling_model extends App_Model
         $old_debug = $this->db->db_debug;
         $this->db->db_debug = false;
 
-        $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
-        if (!$chk || $chk->num_rows() === 0) {
+        try {
+            $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
+            if (!$chk || $chk->num_rows() === 0) {
+                $this->db->db_debug = $old_debug;
+                return ['total' => 0, 'today' => 0];
+            }
+
+            $today = date('Y-m-d');
+            $total_q = $this->db->query("SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings");
+            $total   = ($total_q && $total_q->num_rows()) ? (int) $total_q->row()->cnt : 0;
+
+            $today_q = $this->db->query(
+                "SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings WHERE DATE(created_at) = ?",
+                [$today]
+            );
+            $today_count = ($today_q && $today_q->num_rows()) ? (int) $today_q->row()->cnt : 0;
+
+            $this->db->db_debug = $old_debug;
+            return ['total' => $total, 'today' => $today_count];
+        } catch (\Throwable $e) {
             $this->db->db_debug = $old_debug;
             return ['total' => 0, 'today' => 0];
         }
-
-        $today = date('Y-m-d');
-        $total_q = $this->db->query("SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings");
-        $total   = ($total_q && $total_q->num_rows()) ? (int) $total_q->row()->cnt : 0;
-
-        $today_q = $this->db->query(
-            "SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings WHERE DATE(created_at) = ?",
-            [$today]
-        );
-        $today_count = ($today_q && $today_q->num_rows()) ? (int) $today_q->row()->cnt : 0;
-
-        $this->db->db_debug = $old_debug;
-        return ['total' => $total, 'today' => $today_count];
     }
 
     /**

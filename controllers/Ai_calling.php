@@ -69,6 +69,11 @@ class Ai_calling extends AdminController
     /**
      * Meeting bookings list page.
      *
+     * Hardened against any DB / PHP error so a missing column, broken table,
+     * or unexpected exception NEVER produces an HTTP 500. Real cause is
+     * captured in $data['load_error'] and displayed in a banner inside the
+     * view. Append ?debug=1 to dump full diagnostics.
+     *
      * @route  GET admin/ai_calling/meetings
      * @return void  Renders ai_calling/meetings view.
      */
@@ -78,11 +83,138 @@ class Ai_calling extends AdminController
             access_denied(AI_CALLING_MODULE_NAME);
         }
 
-        $data['meetings']       = $this->ai_calling_model->get_all_meetings(200);
-        $data['meeting_stats']  = $this->ai_calling_model->get_meeting_stats();
-        $data['title']          = _l('ai_calling_meetings');
+        $debug = (int) $this->input->get('debug') === 1;
+        if ($debug) {
+            $this->_meetings_debug();
+            return;
+        }
 
-        $this->load->view('ai_calling/meetings', $data);
+        $data = [
+            'meetings'      => [],
+            'meeting_stats' => ['total' => 0, 'today' => 0],
+            'title'         => 'Meeting Bookings',
+            'load_error'    => null,
+        ];
+
+        try {
+            $data['meetings']      = $this->ai_calling_model->get_all_meetings(200);
+            $data['meeting_stats'] = $this->ai_calling_model->get_meeting_stats();
+        } catch (\Throwable $e) {
+            $data['load_error'] = $e->getMessage();
+            $this->_log_error('meetings_page', $e);
+        }
+
+        try {
+            $data['title'] = _l('ai_calling_meetings');
+        } catch (\Throwable $e) {
+            // _l() shouldn't throw, but be paranoid
+        }
+
+        try {
+            $this->load->view('ai_calling/meetings', $data);
+        } catch (\Throwable $e) {
+            $this->_log_error('meetings_view', $e);
+            // Last-resort plain output so the user always sees something
+            echo '<div style="padding:30px;font-family:sans-serif;">'
+               . '<h2>Meeting Bookings</h2>'
+               . '<p style="color:#a00;"><strong>View render error:</strong> '
+               . htmlspecialchars($e->getMessage()) . '</p>'
+               . '<p>Bookings loaded: ' . count($data['meetings']) . '</p>'
+               . '<p><a href="' . admin_url('ai_calling/meetings?debug=1') . '">Run diagnostics</a></p>'
+               . '</div>';
+        }
+    }
+
+    /**
+     * Diagnostic dump for the meetings page — runs each step in isolation
+     * and reports exactly which one fails. Reachable via
+     * /admin/ai_calling/meetings?debug=1
+     *
+     * @return void  Outputs JSON.
+     */
+    private function _meetings_debug(): void
+    {
+        header('Content-Type: application/json');
+        $report = [
+            'php_version'      => PHP_VERSION,
+            'module_version'   => defined('AI_CALLING_VERSION') ? AI_CALLING_VERSION : 'unknown',
+            'time'             => date('Y-m-d H:i:s'),
+            'steps'            => [],
+        ];
+
+        $step = function (string $name, callable $fn) use (&$report) {
+            try {
+                $report['steps'][$name] = ['ok' => true, 'result' => $fn()];
+            } catch (\Throwable $e) {
+                $report['steps'][$name] = [
+                    'ok'    => false,
+                    'error' => $e->getMessage(),
+                    'file'  => $e->getFile(),
+                    'line'  => $e->getLine(),
+                    'trace' => array_slice(explode("\n", $e->getTraceAsString()), 0, 5),
+                ];
+            }
+        };
+
+        $step('table_exists', function () {
+            $old = $this->db->db_debug;
+            $this->db->db_debug = false;
+            $q = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
+            $this->db->db_debug = $old;
+            return ['exists' => $q && $q->num_rows() > 0];
+        });
+
+        $step('table_columns', function () {
+            $old = $this->db->db_debug;
+            $this->db->db_debug = false;
+            $q = $this->db->query("SHOW COLUMNS FROM `tblai_meeting_bookings`");
+            $this->db->db_debug = $old;
+            return $q ? array_column($q->result_array(), 'Field') : [];
+        });
+
+        $step('tblleads_has_ai_call_summary', function () {
+            return $this->db->field_exists('ai_call_summary', 'tblleads');
+        });
+
+        $step('tblleads_has_call_recording_url', function () {
+            return $this->db->field_exists('call_recording_url', 'tblleads');
+        });
+
+        $step('count_bookings', function () {
+            $old = $this->db->db_debug;
+            $this->db->db_debug = false;
+            $q = $this->db->query("SELECT COUNT(*) AS c FROM tblai_meeting_bookings");
+            $this->db->db_debug = $old;
+            return $q ? (int) $q->row()->c : -1;
+        });
+
+        $step('get_all_meetings', function () {
+            $rows = $this->ai_calling_model->get_all_meetings(5);
+            return ['count' => count($rows), 'sample' => $rows[0] ?? null];
+        });
+
+        $step('get_meeting_stats', function () {
+            return $this->ai_calling_model->get_meeting_stats();
+        });
+
+        echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Logs an exception to module/ai_calling/logs/page_errors_YYYY-MM-DD.log
+     * so the user can see what really failed even if the browser only shows 500.
+     */
+    private function _log_error(string $context, \Throwable $e): void
+    {
+        $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
+        if (!is_dir($log_dir)) @mkdir($log_dir, 0755, true);
+        @file_put_contents(
+            $log_dir . 'page_errors_' . date('Y-m-d') . '.log',
+            '[' . date('Y-m-d H:i:s') . '] ' . $context . ' :: '
+            . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() . "\n"
+            . $e->getTraceAsString() . "\n---\n",
+            FILE_APPEND
+        );
     }
 
     /**
