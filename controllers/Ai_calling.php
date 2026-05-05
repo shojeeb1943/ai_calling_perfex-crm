@@ -293,9 +293,11 @@ class Ai_calling extends AdminController
         $meeting_notes = $args['meetingDetails'] ?? null;
 
         // Resolve lead_id from DB using the call_id
-        $lead_row = $call_id ? $this->db->query(
-            "SELECT id, name, phonenumber FROM tblleads WHERE vapi_call_id = ?", [$call_id]
-        )->row_array() : [];
+        $lead_row = [];
+        if ($call_id) {
+            $q = $this->db->query("SELECT id, name, phonenumber FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
+            $lead_row = ($q && $q->num_rows()) ? $q->row_array() : [];
+        }
 
         $lead_id    = (int) ($lead_row['id'] ?? 0);
         $lead_name  = $lead_row['name']        ?? $client_name;
@@ -454,7 +456,7 @@ class Ai_calling extends AdminController
                 );
 
                 // CRM lead status IDs (tblleads_status)
-                // 2 = FOLLOWUP CLIENT  |  8 = CLOSE CLIENT
+                // 12 = AI Followup  |  8 = CLOSE CLIENT
                 $crm_status = null;
 
                 // ── Expert request keywords (English + Bangla) ───────────────
@@ -475,9 +477,11 @@ class Ai_calling extends AdminController
                 } elseif ($is_meeting_booked) {
                     // Client confirmed a meeting during the call → store booking record
                     $status = 'meeting_booked';
-                    $lead_row     = $call_id ? $this->db->query(
-                        "SELECT id, phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]
-                    )->row_array() : [];
+                    $lead_row = [];
+                    if ($call_id) {
+                        $q = $this->db->query("SELECT id, phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
+                        $lead_row = ($q && $q->num_rows()) ? $q->row_array() : [];
+                    }
                     $book_lead_id = (int) ($lead_row['id'] ?? 0);
                     $book_name    = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
                     $book_phone   = $lead_row['phonenumber'] ?? ($call['customer']['number'] ?? '');
@@ -489,16 +493,18 @@ class Ai_calling extends AdminController
                     // Client requested human expert — notify owner via Telegram
                     $status = 'expert_requested';
                     // Look up real phone from DB (Vapi payload may have unresolved variables)
-                    $lead_row     = $call_id ? $this->db->query(
-                        "SELECT phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]
-                    )->row_array() : [];
+                    $lead_row = [];
+                    if ($call_id) {
+                        $q = $this->db->query("SELECT phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
+                        $lead_row = ($q && $q->num_rows()) ? $q->row_array() : [];
+                    }
                     $notify_name  = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
                     $notify_phone = $lead_row['phonenumber']  ?? ($call['customer']['number'] ?? '');
                     $this->_send_whatsapp_expert_request($notify_name, $notify_phone);
                 } elseif ($is_interested) {
-                    // Interested → move to FOLLOWUP CLIENT queue, schedule next call
+                    // Interested → move to AI Followup queue, schedule next call
                     $status     = 'callback_scheduled';
-                    $crm_status = 2; // FOLLOWUP CLIENT
+                    $crm_status = 12; // AI Followup
                 } elseif ($is_callback) {
                     $status = 'callback_scheduled';
                 }
@@ -562,16 +568,7 @@ class Ai_calling extends AdminController
         $skipped = [];
 
         foreach ($columns as $col => $definition) {
-            $exists = $this->db->query(
-                "SELECT COUNT(*) AS cnt
-                 FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME   = 'tblleads'
-                   AND COLUMN_NAME  = ?",
-                [$col]
-            )->row()->cnt;
-
-            if (!$exists) {
+            if (!$this->db->field_exists($col, 'tblleads')) {
                 $this->db->query("ALTER TABLE tblleads ADD COLUMN `{$col}` {$definition}");
                 $added[] = $col;
             } else {
@@ -580,14 +577,10 @@ class Ai_calling extends AdminController
         }
 
         // Also create the meetings table if it doesn't exist
-        $meetings_table = $this->db->query(
-            "SELECT COUNT(*) AS cnt FROM information_schema.TABLES
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tblai_meeting_bookings'"
-        )->row()->cnt;
-
-        if (!$meetings_table) {
+        if (!$this->db->table_exists('tblai_meeting_bookings')) {
+            $charset = $this->db->char_set ?: 'utf8';
             $this->db->query("
-                CREATE TABLE `tblai_meeting_bookings` (
+                CREATE TABLE IF NOT EXISTS `tblai_meeting_bookings` (
                     `id`          INT(11)      NOT NULL AUTO_INCREMENT,
                     `lead_id`     INT(11)      DEFAULT NULL,
                     `lead_name`   VARCHAR(255) NOT NULL DEFAULT '',
@@ -598,7 +591,7 @@ class Ai_calling extends AdminController
                     PRIMARY KEY (`id`),
                     KEY `idx_lead_id` (`lead_id`),
                     KEY `idx_created_at` (`created_at`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
             ");
             $added[] = 'tblai_meeting_bookings (table)';
         } else {

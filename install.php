@@ -67,17 +67,7 @@ $columns = [
 ];
 
 foreach ($columns as $col => $definition) {
-    // Check information_schema before altering so the script is idempotent.
-    $exists = $CI->db->query(
-        "SELECT COUNT(*) AS cnt
-         FROM information_schema.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE()
-           AND TABLE_NAME   = 'tblleads'
-           AND COLUMN_NAME  = ?",
-        [$col]
-    )->row()->cnt;
-
-    if (!$exists) {
+    if (!$CI->db->field_exists($col, 'tblleads')) {
         $CI->db->query("ALTER TABLE tblleads ADD COLUMN `{$col}` {$definition}");
         log_message('info', "[ai_calling] Added column tblleads.{$col}");
     }
@@ -85,16 +75,10 @@ foreach ($columns as $col => $definition) {
 
 // ─── Meeting bookings table ───────────────────────────────────────────────────
 
-$table_exists = $CI->db->query(
-    "SELECT COUNT(*) AS cnt
-     FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE()
-       AND TABLE_NAME   = 'tblai_meeting_bookings'"
-)->row()->cnt;
-
-if (!$table_exists) {
+if (!$CI->db->table_exists('tblai_meeting_bookings')) {
+    $charset = $CI->db->char_set ?: 'utf8';
     $CI->db->query("
-        CREATE TABLE `tblai_meeting_bookings` (
+        CREATE TABLE IF NOT EXISTS `tblai_meeting_bookings` (
             `id`          INT(11)      NOT NULL AUTO_INCREMENT,
             `lead_id`     INT(11)      DEFAULT NULL,
             `lead_name`   VARCHAR(255) NOT NULL DEFAULT '',
@@ -105,7 +89,7 @@ if (!$table_exists) {
             PRIMARY KEY (`id`),
             KEY `idx_lead_id` (`lead_id`),
             KEY `idx_created_at` (`created_at`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
     ");
     log_message('info', '[ai_calling] Created table tblai_meeting_bookings');
 }

@@ -28,15 +28,15 @@ class Ai_calling_model extends App_Model
      * CRM status IDs that qualify a lead for outbound calling.
      *
      * Corresponds to rows in tblleads_status:
-     *   1 = Lead
-     *   2 = FOLLOWUP CLIENT
+     *   11 = AI LEADS
+     *   12 = AI Followup
      *
      * Any lead whose `status` column is NOT in this list is silently skipped,
      * regardless of its ai_call_status value.
      *
      * @var int[]
      */
-    private array $callable_statuses = [1, 2];
+    private array $callable_statuses = [11, 12];
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -48,27 +48,25 @@ class Ai_calling_model extends App_Model
 
     private function _ensure_meetings_table(): void
     {
-        $exists = $this->db->query(
-            "SELECT COUNT(*) AS cnt FROM information_schema.TABLES
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tblai_meeting_bookings'"
-        )->row()->cnt;
-
-        if (!$exists) {
-            $this->db->query("
-                CREATE TABLE `tblai_meeting_bookings` (
-                    `id`            INT(11)      NOT NULL AUTO_INCREMENT,
-                    `lead_id`       INT(11)      DEFAULT NULL,
-                    `lead_name`     VARCHAR(255) NOT NULL DEFAULT '',
-                    `lead_phone`    VARCHAR(50)  NOT NULL DEFAULT '',
-                    `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
-                    `booking_notes` TEXT         DEFAULT NULL,
-                    `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (`id`),
-                    KEY `idx_lead_id` (`lead_id`),
-                    KEY `idx_created_at` (`created_at`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
+        if ($this->db->table_exists('tblai_meeting_bookings')) {
+            return;
         }
+
+        $charset = $this->db->char_set ?: 'utf8';
+        $this->db->query("
+            CREATE TABLE IF NOT EXISTS `tblai_meeting_bookings` (
+                `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+                `lead_id`       INT(11)      DEFAULT NULL,
+                `lead_name`     VARCHAR(255) NOT NULL DEFAULT '',
+                `lead_phone`    VARCHAR(50)  NOT NULL DEFAULT '',
+                `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
+                `booking_notes` TEXT         DEFAULT NULL,
+                `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_lead_id` (`lead_id`),
+                KEY `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
+        ");
     }
 
     // ─── Read ─────────────────────────────────────────────────────────────────
@@ -118,7 +116,8 @@ class Ai_calling_model extends App_Model
         $this->db->order_by('id', 'DESC');
         $this->db->limit((int) $limit);
 
-        return $this->db->get()->result_array();
+        $query = $this->db->get();
+        return $query ? $query->result_array() : [];
     }
 
     /**
@@ -141,7 +140,8 @@ class Ai_calling_model extends App_Model
         $this->db->order_by('last_ai_call', 'DESC');
         $this->db->limit((int) $limit);
 
-        return $this->db->get()->result_array();
+        $query = $this->db->get();
+        return $query ? $query->result_array() : [];
     }
 
     /**
@@ -166,21 +166,36 @@ class Ai_calling_model extends App_Model
     {
         $today = date('Y-m-d');
 
-        $pending = $this->db
-            ->where('ai_call_status', 'pending')
-            ->where_in('status', $this->callable_statuses)
-            ->get('tblleads')
-            ->num_rows();
+        $q = $this->db->where('ai_call_status', 'pending')->where_in('status', $this->callable_statuses)->get('tblleads');
+        $pending = $q ? $q->num_rows() : 0;
+
+        $q = $this->db->where('DATE(last_ai_call)', $today)->get('tblleads');
+        $called_today = $q ? $q->num_rows() : 0;
+
+        // "interested" = callback_scheduled with CRM status in AI Followup (12) or AI LEADS (11)
+        $q = $this->db->where('ai_call_status', 'callback_scheduled')->where_in('status', $this->callable_statuses)->get('tblleads');
+        $interested = $q ? $q->num_rows() : 0;
+
+        $q = $this->db->where('ai_call_status', 'callback_scheduled')->get('tblleads');
+        $callback = $q ? $q->num_rows() : 0;
+
+        $q = $this->db->where('ai_call_status', 'not_interested')->get('tblleads');
+        $not_interested = $q ? $q->num_rows() : 0;
+
+        $q = $this->db->where('ai_call_status', 'failed')->get('tblleads');
+        $failed = $q ? $q->num_rows() : 0;
+
+        $q = $this->db->where('last_ai_call IS NOT NULL', null, false)->get('tblleads');
+        $total_called = $q ? $q->num_rows() : 0;
 
         return [
             'pending'        => $pending,
-            'called_today'   => $this->db->where('DATE(last_ai_call)', $today)->get('tblleads')->num_rows(),
-            // "interested" = callback_scheduled with CRM status=2 (FOLLOWUP CLIENT)
-            'interested'     => $this->db->where('ai_call_status', 'callback_scheduled')->where('status', 2)->get('tblleads')->num_rows(),
-            'callback'       => $this->db->where('ai_call_status', 'callback_scheduled')->get('tblleads')->num_rows(),
-            'not_interested' => $this->db->where('ai_call_status', 'not_interested')->get('tblleads')->num_rows(),
-            'failed'         => $this->db->where('ai_call_status', 'failed')->get('tblleads')->num_rows(),
-            'total_called'   => $this->db->where('last_ai_call IS NOT NULL', null, false)->get('tblleads')->num_rows(),
+            'called_today'   => $called_today,
+            'interested'     => $interested,
+            'callback'       => $callback,
+            'not_interested' => $not_interested,
+            'failed'         => $failed,
+            'total_called'   => $total_called,
         ];
     }
 
@@ -203,11 +218,8 @@ class Ai_calling_model extends App_Model
      */
     public function mark_lead_called(int $lead_id, string $call_id): void
     {
-        $row = $this->db
-            ->select('followup_count')
-            ->where('id', $lead_id)
-            ->get('tblleads')
-            ->row();
+        $q   = $this->db->select('followup_count')->where('id', $lead_id)->get('tblleads');
+        $row = $q ? $q->row() : null;
 
         $new_count = $row ? ((int) $row->followup_count + 1) : 1;
 
@@ -309,7 +321,8 @@ class Ai_calling_model extends App_Model
             ORDER BY m.created_at DESC
             LIMIT ?
         ";
-        return $this->db->query($sql, [(int) $limit])->result_array();
+        $query = $this->db->query($sql, [(int) $limit]);
+        return $query ? $query->result_array() : [];
     }
 
     /**
@@ -320,12 +333,11 @@ class Ai_calling_model extends App_Model
     public function get_meeting_stats(): array
     {
         $today = date('Y-m-d');
+        $total = $this->db->count_all('tblai_meeting_bookings');
+        $q     = $this->db->where('DATE(created_at)', $today)->get('tblai_meeting_bookings');
         return [
-            'total' => $this->db->count_all('tblai_meeting_bookings'),
-            'today' => $this->db
-                ->where('DATE(created_at)', $today)
-                ->get('tblai_meeting_bookings')
-                ->num_rows(),
+            'total' => $total,
+            'today' => $q ? $q->num_rows() : 0,
         ];
     }
 
@@ -340,11 +352,8 @@ class Ai_calling_model extends App_Model
         if ($refund_count) {
             // Pull current count and decrement (floor 0) — SIP error means
             // no real call attempt was made.
-            $row = $this->db
-                ->select('followup_count')
-                ->where('vapi_call_id', $vapi_call_id)
-                ->get('tblleads')
-                ->row();
+            $q   = $this->db->select('followup_count')->where('vapi_call_id', $vapi_call_id)->get('tblleads');
+            $row = $q ? $q->row() : null;
 
             if ($row) {
                 $fields['followup_count'] = max(0, (int) $row->followup_count - 1);
