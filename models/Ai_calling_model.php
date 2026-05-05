@@ -34,9 +34,9 @@ class Ai_calling_model extends App_Model
      * Any lead whose `status` column is NOT in this list is silently skipped,
      * regardless of its ai_call_status value.
      *
-     * @var int[]
+     * @var array<int>
      */
-    private array $callable_statuses = [11, 12];
+    private $callable_statuses = [11, 12];
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -258,24 +258,6 @@ class Ai_calling_model extends App_Model
         $this->db->update('tblleads', $fields);
     }
 
-    /**
-     * Marks a lead as failed after a Vapi webhook reports a call error.
-     *
-     * For SIP/infrastructure errors (the call never connected at network level)
-     * the followup_count is decremented so the slot is not wasted — the lead
-     * will be retried as if the call had never been attempted.
-     *
-     * For soft failures (no-answer, busy, voicemail) the count is kept so
-     * repeated unreachable attempts eventually age the lead out.
-     *
-     * In both cases next_followup_date is cleared so get_leads_to_call()
-     * picks the lead up immediately on the next session.
-     *
-     * @param  string $vapi_call_id  Vapi call UUID from the webhook payload.
-     * @param  string $reason        Raw endedReason string from Vapi.
-     * @param  bool   $refund_count  True for SIP errors — refunds followup_count.
-     * @return void
-     */
     // ─── Meeting bookings ─────────────────────────────────────────────────────
 
     /**
@@ -387,6 +369,24 @@ class Ai_calling_model extends App_Model
         return ['total' => $total, 'today' => $today_count];
     }
 
+    /**
+     * Marks a lead as failed after a Vapi webhook reports a call error.
+     *
+     * For SIP/infrastructure errors (the call never connected at network level)
+     * the followup_count is decremented so the slot is not wasted — the lead
+     * will be retried as if the call had never been attempted.
+     *
+     * For soft failures (no-answer, busy, voicemail) the count is kept so
+     * repeated unreachable attempts eventually age the lead out.
+     *
+     * In both cases next_followup_date is cleared so get_leads_to_call()
+     * picks the lead up immediately on the next session.
+     *
+     * @param  string $vapi_call_id  Vapi call UUID from the webhook payload.
+     * @param  string $reason        Raw endedReason string from Vapi.
+     * @param  bool   $refund_count  True for SIP errors — refunds followup_count.
+     * @return void
+     */
     public function mark_lead_failed(string $vapi_call_id, string $reason, bool $refund_count = false): void
     {
         $fields = [

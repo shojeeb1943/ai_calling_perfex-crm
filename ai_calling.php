@@ -81,6 +81,14 @@ if (!defined('AI_VAPI_TWILIO_PHONE_ID')) {
     define('AI_VAPI_TWILIO_PHONE_ID', '');
 }
 
+// Ensure Telegram constants exist even if vapi.php predates this feature
+if (!defined('AI_TELEGRAM_BOT_TOKEN')) {
+    define('AI_TELEGRAM_BOT_TOKEN', '');
+}
+if (!defined('AI_TELEGRAM_CHAT_ID')) {
+    define('AI_TELEGRAM_CHAT_ID', '');
+}
+
 // ─── API & calling behaviour constants ───────────────────────────────────────
 
 /** @var string Full URL for the Vapi outbound-call endpoint. */
