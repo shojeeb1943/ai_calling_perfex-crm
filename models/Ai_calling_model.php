@@ -48,11 +48,12 @@ class Ai_calling_model extends App_Model
 
     private function _ensure_meetings_table(): void
     {
-        if ($this->db->table_exists('tblai_meeting_bookings')) {
-            return;
-        }
-
-        $charset = $this->db->char_set ?: 'utf8';
+        // Always run CREATE TABLE IF NOT EXISTS — never use table_exists() as a
+        // gate here because CI3's schema library can lie (prefix bugs, cached
+        // SHOW TABLES result). IF NOT EXISTS is idempotent and safe.
+        $charset   = $this->db->char_set ?: 'utf8';
+        $old_debug = $this->db->db_debug;
+        $this->db->db_debug = false;
         $this->db->query("
             CREATE TABLE IF NOT EXISTS `tblai_meeting_bookings` (
                 `id`            INT(11)      NOT NULL AUTO_INCREMENT,
@@ -67,6 +68,7 @@ class Ai_calling_model extends App_Model
                 KEY `idx_created_at` (`created_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
         ");
+        $this->db->db_debug = $old_debug;
     }
 
     // ─── Read ─────────────────────────────────────────────────────────────────
@@ -307,17 +309,23 @@ class Ai_calling_model extends App_Model
      */
     public function get_all_meetings(int $limit = 200): array
     {
-        if (!$this->db->table_exists('tblai_meeting_bookings')) {
+        // Use raw SHOW TABLES — more reliable than CI3's table_exists() which
+        // can be tricked by prefix bugs or a stale schema-library cache.
+        $old_debug = $this->db->db_debug;
+        $this->db->db_debug = false;
+
+        $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
+        if (!$chk || $chk->num_rows() === 0) {
+            $this->db->db_debug = $old_debug;
             return [];
         }
 
-        // Check whether the extra tblleads columns exist (added by install.php).
-        // If missing, fall back to a simple query that only reads tblai_meeting_bookings.
+        // Check whether the extra tblleads columns exist (added by install.php migration).
+        // field_exists() runs DESCRIBE — safe even if columns are missing.
         $has_summary   = $this->db->field_exists('ai_call_summary',    'tblleads');
         $has_recording = $this->db->field_exists('call_recording_url', 'tblleads');
 
         if ($has_summary && $has_recording) {
-            // l1 = match by stored lead_id; l2 = phone-number fallback when lead_id is NULL
             $sql = "
                 SELECT
                     m.*,
@@ -332,7 +340,6 @@ class Ai_calling_model extends App_Model
                 LIMIT ?
             ";
         } else {
-            // Fallback: no JOIN — extra columns will be absent (view handles missing keys)
             $sql = "
                 SELECT
                     m.*,
@@ -346,6 +353,7 @@ class Ai_calling_model extends App_Model
         }
 
         $query = $this->db->query($sql, [(int) $limit]);
+        $this->db->db_debug = $old_debug;
         return $query ? $query->result_array() : [];
     }
 
@@ -356,17 +364,27 @@ class Ai_calling_model extends App_Model
      */
     public function get_meeting_stats(): array
     {
-        if (!$this->db->table_exists('tblai_meeting_bookings')) {
+        $old_debug = $this->db->db_debug;
+        $this->db->db_debug = false;
+
+        $chk = $this->db->query("SHOW TABLES LIKE 'tblai_meeting_bookings'");
+        if (!$chk || $chk->num_rows() === 0) {
+            $this->db->db_debug = $old_debug;
             return ['total' => 0, 'today' => 0];
         }
 
         $today = date('Y-m-d');
-        $total = $this->db->count_all('tblai_meeting_bookings');
-        $q     = $this->db->where('DATE(created_at)', $today)->get('tblai_meeting_bookings');
-        return [
-            'total' => $total,
-            'today' => $q ? $q->num_rows() : 0,
-        ];
+        $total_q = $this->db->query("SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings");
+        $total   = ($total_q && $total_q->num_rows()) ? (int) $total_q->row()->cnt : 0;
+
+        $today_q = $this->db->query(
+            "SELECT COUNT(*) AS cnt FROM tblai_meeting_bookings WHERE DATE(created_at) = ?",
+            [$today]
+        );
+        $today_count = ($today_q && $today_q->num_rows()) ? (int) $today_q->row()->cnt : 0;
+
+        $this->db->db_debug = $old_debug;
+        return ['total' => $total, 'today' => $today_count];
     }
 
     public function mark_lead_failed(string $vapi_call_id, string $reason, bool $refund_count = false): void
