@@ -307,20 +307,44 @@ class Ai_calling_model extends App_Model
      */
     public function get_all_meetings(int $limit = 200): array
     {
-        // l1 = match by stored lead_id; l2 = phone-number fallback when lead_id is NULL
-        $sql = "
-            SELECT
-                m.*,
-                COALESCE(l1.id,                  l2.id)                  AS crm_lead_id,
-                COALESCE(l1.ai_call_summary,      l2.ai_call_summary)     AS lead_transcript,
-                COALESCE(l1.call_recording_url,   l2.call_recording_url)  AS lead_recording_url
-            FROM  tblai_meeting_bookings m
-            LEFT JOIN tblleads l1 ON l1.id          = m.lead_id
-            LEFT JOIN tblleads l2 ON l2.phonenumber = m.lead_phone
-                                 AND m.lead_id IS NULL
-            ORDER BY m.created_at DESC
-            LIMIT ?
-        ";
+        if (!$this->db->table_exists('tblai_meeting_bookings')) {
+            return [];
+        }
+
+        // Check whether the extra tblleads columns exist (added by install.php).
+        // If missing, fall back to a simple query that only reads tblai_meeting_bookings.
+        $has_summary   = $this->db->field_exists('ai_call_summary',    'tblleads');
+        $has_recording = $this->db->field_exists('call_recording_url', 'tblleads');
+
+        if ($has_summary && $has_recording) {
+            // l1 = match by stored lead_id; l2 = phone-number fallback when lead_id is NULL
+            $sql = "
+                SELECT
+                    m.*,
+                    COALESCE(l1.id,                  l2.id)                  AS crm_lead_id,
+                    COALESCE(l1.ai_call_summary,      l2.ai_call_summary)     AS lead_transcript,
+                    COALESCE(l1.call_recording_url,   l2.call_recording_url)  AS lead_recording_url
+                FROM  tblai_meeting_bookings m
+                LEFT JOIN tblleads l1 ON l1.id          = m.lead_id
+                LEFT JOIN tblleads l2 ON l2.phonenumber = m.lead_phone
+                                     AND m.lead_id IS NULL
+                ORDER BY m.created_at DESC
+                LIMIT ?
+            ";
+        } else {
+            // Fallback: no JOIN — extra columns will be absent (view handles missing keys)
+            $sql = "
+                SELECT
+                    m.*,
+                    m.lead_id AS crm_lead_id,
+                    NULL      AS lead_transcript,
+                    NULL      AS lead_recording_url
+                FROM  tblai_meeting_bookings m
+                ORDER BY m.created_at DESC
+                LIMIT ?
+            ";
+        }
+
         $query = $this->db->query($sql, [(int) $limit]);
         return $query ? $query->result_array() : [];
     }
@@ -332,6 +356,10 @@ class Ai_calling_model extends App_Model
      */
     public function get_meeting_stats(): array
     {
+        if (!$this->db->table_exists('tblai_meeting_bookings')) {
+            return ['total' => 0, 'today' => 0];
+        }
+
         $today = date('Y-m-d');
         $total = $this->db->count_all('tblai_meeting_bookings');
         $q     = $this->db->where('DATE(created_at)', $today)->get('tblai_meeting_bookings');

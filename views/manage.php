@@ -461,7 +461,7 @@ document.getElementById('btn-start-calling').addEventListener('click', function 
     var log    = document.getElementById('calling-log');
 
     btn.disabled    = true;
-    btn.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Calling...';
+    btn.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Calling...<small style="display:block;font-size:11px;font-weight:normal;opacity:0.85;">Dispatching calls, please wait&hellip;</small>';
     result.style.display = 'none';
 
     var csrfData = new FormData();

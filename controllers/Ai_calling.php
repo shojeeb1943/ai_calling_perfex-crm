@@ -104,7 +104,7 @@ class Ai_calling extends AdminController
             return;
         }
 
-        $result = $this->_run_calling_session();
+        $result = $this->_run_calling_session(true);
         echo json_encode($result);
     }
 
@@ -1084,7 +1084,7 @@ class Ai_calling extends AdminController
      *                                         or  "ERR | Name | Phone | error".
      * }
      */
-    private function _run_calling_session(): array
+    private function _run_calling_session(bool $skip_delay = false): array
     {
         @set_time_limit(0); // prevent PHP timeout on shared hosting
 
@@ -1097,7 +1097,7 @@ class Ai_calling extends AdminController
         ];
 
         $max_per_run    = (int)(get_option('ai_calling_max_per_run') ?: AI_MAX_CALLS_PER_RUN);
-        $delay_sec      = (int)(get_option('ai_calling_delay_sec')  ?: AI_CALL_DELAY_SEC);
+        $delay_sec      = $skip_delay ? 0 : (int)(get_option('ai_calling_delay_sec') ?: AI_CALL_DELAY_SEC);
         $leads          = $this->ai_calling_model->get_leads_to_call($max_per_run);
         $stats['total'] = count($leads);
 
@@ -1106,7 +1106,7 @@ class Ai_calling extends AdminController
             return $stats;
         }
 
-        foreach ($leads as $lead) {
+        foreach ($leads as $i => $lead) {
             $result = $this->_call_lead($lead);
 
             if ($result['success']) {
@@ -1116,15 +1116,18 @@ class Ai_calling extends AdminController
             } elseif (!empty($result['concurrency_blocked'])) {
                 // Vapi has hit its concurrent call cap — abort the session now.
                 // Remaining leads stay pending and will be retried next run.
-                $stats['log'][]     = "STOP| Concurrency limit reached — remaining leads will retry next run";
-                $stats['message']   = $result['error'];
+                $stats['log'][]   = "STOP| Concurrency limit reached — remaining leads will retry next run";
+                $stats['message'] = $result['error'];
                 break;
             } else {
                 $stats['failed']++;
                 $stats['log'][] = "ERR | {$lead['name']} | {$lead['phonenumber']} | {$result['error']}";
             }
 
-            sleep($delay_sec);
+            // Only sleep between calls (not after the last one), and not at all for manual runs.
+            if ($delay_sec > 0 && $i < count($leads) - 1) {
+                sleep($delay_sec);
+            }
         }
 
         $this->_log_session($stats);
