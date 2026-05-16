@@ -294,20 +294,23 @@ function ai_calling_lead_tab_content($lead): void
                             <th>Ended Reason</th>
                             <th>Recording</th>
                             <th>Transcript</th>
+                            <th style="width:50px;text-align:center;">Vapi</th>
                         </tr>
                     </thead>
                     <tbody>
                     <?php
-                    $total_rows = count($history);
+                    $total_rows      = count($history);
+                    $fetch_trans_url = admin_url('ai_calling/fetch_transcript');
                     foreach ($history as $i => $call):
                         $attempt_num  = $total_rows - $i; // oldest = #1
-                        $row_status   = $call['status'] ?? 'called';
+                        $row_status   = $call['status']       ?? 'called';
                         $row_badge    = $status_labels[$row_status] ?? ['label' => ucfirst($row_status), 'class' => 'default'];
                         $row_rec      = $call['recording_url'] ?? '';
                         $row_trans    = trim($call['transcript'] ?? '');
-                        $row_reason   = $call['ended_reason']   ?? '';
-                        $row_date     = $call['called_at']       ?? '';
-                        $row_updated  = $call['updated_at']      ?? '';
+                        $row_reason   = $call['ended_reason']  ?? '';
+                        $row_date     = $call['called_at']     ?? '';
+                        $row_updated  = $call['updated_at']    ?? '';
+                        $row_vapi_id  = $call['vapi_call_id']  ?? '';
                         $display_date = $row_updated ?: $row_date;
                         $trans_id     = 'ach-trans-' . $lead_id . '-' . $i;
                     ?>
@@ -334,7 +337,7 @@ function ai_calling_lead_tab_content($lead): void
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
                             </td>
-                            <td>
+                            <td id="<?php echo $trans_id; ?>-cell">
                                 <?php if ($row_trans): ?>
                                     <span style="cursor:pointer;color:#337ab7;"
                                           onclick="document.getElementById('<?php echo $trans_id; ?>').style.display=document.getElementById('<?php echo $trans_id; ?>').style.display==='none'?'block':'none'">
@@ -343,6 +346,27 @@ function ai_calling_lead_tab_content($lead): void
                                     </span>
                                     <pre id="<?php echo $trans_id; ?>"
                                          style="display:none;margin-top:8px;white-space:pre-wrap;word-break:break-word;background:#f8f8f8;padding:10px;border-radius:4px;font-size:12px;max-height:300px;overflow-y:auto;border:1px solid #e5e5e5;"><?php echo htmlspecialchars($row_trans); ?></pre>
+                                <?php elseif ($row_vapi_id): ?>
+                                    <button type="button"
+                                            class="btn btn-xs btn-default ai-fetch-transcript-btn"
+                                            data-call-id="<?php echo htmlspecialchars($row_vapi_id); ?>"
+                                            data-cell="<?php echo $trans_id; ?>-cell"
+                                            data-csrf-name="<?php echo $CI->security->get_csrf_token_name(); ?>"
+                                            data-csrf-value="<?php echo $CI->security->get_csrf_hash(); ?>"
+                                            data-url="<?php echo $fetch_trans_url; ?>">
+                                        <i class="fa fa-download"></i> Fetch
+                                    </button>
+                                    <span class="ai-fetch-msg" style="font-size:11px;margin-left:4px;color:#a94442;"></span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="text-align:center;">
+                                <?php if ($row_vapi_id): ?>
+                                    <a href="https://dashboard.vapi.ai/calls/<?php echo htmlspecialchars($row_vapi_id); ?>"
+                                       target="_blank" rel="noopener" title="Open in Vapi Dashboard" style="font-size:15px;">
+                                        <i class="fa fa-external-link"></i>
+                                    </a>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
@@ -358,6 +382,41 @@ function ai_calling_lead_tab_content($lead): void
     </div>
 
     <script>
+    $(document).on('click', '.ai-fetch-transcript-btn', function () {
+        var btn      = $(this);
+        var callId   = btn.data('call-id');
+        var cellId   = btn.data('cell');
+        var csrfName = btn.data('csrf-name');
+        var csrfVal  = btn.data('csrf-value');
+        var url      = btn.data('url');
+        var msgEl    = btn.siblings('.ai-fetch-msg');
+
+        btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i>');
+        msgEl.text('');
+
+        var postData = { call_id: callId };
+        postData[csrfName] = csrfVal;
+
+        $.post(url, postData, function (res) {
+            if (res.success && res.transcript) {
+                var escaped = $('<div>').text(res.transcript).html();
+                var preview = res.transcript.substring(0, 60) + (res.transcript.length > 60 ? '…' : '');
+                var cellEl  = document.getElementById(cellId);
+                var uid     = cellId + '-pre';
+                cellEl.innerHTML =
+                    '<span style="cursor:pointer;color:#337ab7;" onclick="var p=document.getElementById(\'' + uid + '\');p.style.display=p.style.display===\'none\'?\'block\':\'none\'">' +
+                    '<i class="fa fa-file-text-o"></i> ' + $('<div>').text(preview).html() + '</span>' +
+                    '<pre id="' + uid + '" style="display:none;margin-top:8px;white-space:pre-wrap;word-break:break-word;background:#f8f8f8;padding:10px;border-radius:4px;font-size:12px;max-height:300px;overflow-y:auto;border:1px solid #e5e5e5;">' + escaped + '</pre>';
+            } else {
+                btn.prop('disabled', false).html('<i class="fa fa-download"></i> Fetch');
+                msgEl.text(res.message || 'Not ready yet — retry in a few seconds.');
+            }
+        }, 'json').fail(function () {
+            btn.prop('disabled', false).html('<i class="fa fa-download"></i> Fetch');
+            msgEl.text('Request failed.');
+        });
+    });
+
     function aiCallingCallNow(leadId) {
         var btn = document.getElementById('ai-call-now-btn-' + leadId);
         var msg = document.getElementById('ai-call-now-msg-' + leadId);

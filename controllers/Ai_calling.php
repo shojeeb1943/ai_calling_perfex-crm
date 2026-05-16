@@ -508,74 +508,93 @@ class Ai_calling extends AdminController
         $raw  = file_get_contents('php://input');
         $data = json_decode($raw, true) ?? [];
 
-        // Respond immediately so Vapi doesn't wait
-        $tool_call_id = $data['message']['toolCalls'][0]['id']
-            ?? $data['toolCallId']
-            ?? null;
-
-        $response = $tool_call_id
-            ? ['results' => [['toolCallId' => $tool_call_id, 'result' => 'Meeting booked successfully.']]]
-            : ['status' => 'ok'];
-
-        ob_start();
-        echo json_encode($response);
-        header('Connection: close');
-        header('Content-Length: ' . ob_get_length());
-        header('Content-Type: application/json');
-        ob_end_flush();
-        ob_flush();
-        flush();
-        if (function_exists('fastcgi_finish_request')) {
-            fastcgi_finish_request();
-        }
-
         // Log raw payload
         $log_dir = dirname(__FILE__, 2) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR;
         if (!is_dir($log_dir)) @mkdir($log_dir, 0755, true);
-        file_put_contents(
-            $log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
-            '[' . date('Y-m-d H:i:s') . '] ' . $raw . "\n",
-            FILE_APPEND
-        );
+        $log_file = $log_dir . 'book_meeting_' . date('Y-m-d') . '.log';
+        file_put_contents($log_file, '[' . date('Y-m-d H:i:s') . '] CTRL RAW: ' . $raw . "\n", FILE_APPEND);
 
         // Extract tool arguments (clientName, clientPhone, meetingDetails).
         // Vapi sends function.arguments as a JSON-encoded string — decode it.
         $raw_args = $data['message']['toolCalls'][0]['function']['arguments']
             ?? $data['arguments']
-            ?? [];
+            ?? $data;
         $args = is_string($raw_args) ? (json_decode($raw_args, true) ?? []) : (array) $raw_args;
 
         $call         = $data['message']['call'] ?? $data['call'] ?? [];
-        $call_id      = $call['id'] ?? null;
+        $call_id      = $call['id'] ?? $data['callId'] ?? null;
 
         $client_name  = $args['clientName']
             ?? $call['customer']['name']
             ?? 'Unknown';
 
-        $client_phone = $args['clientPhone']
-            ?? $call['customer']['number']
-            ?? '';
+        $client_phone_raw = $args['clientPhone'] ?? $call['customer']['number'] ?? '';
+        $client_phone = (strtolower((string)$client_phone_raw) === 'unknown') ? '' : (string)$client_phone_raw;
 
         $meeting_notes = $args['meetingDetails'] ?? null;
 
-        // Resolve lead_id from DB using the call_id
-        $lead_row = [];
-        if ($call_id) {
-            $q = $this->db->query("SELECT id, name, phonenumber FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
-            $lead_row = ($q && $q->num_rows()) ? $q->row_array() : [];
+        // ── Lead lookup — 3-priority chain ────────────────────────────────────
+        // Vapi flat payload has no callId, so fall through to recency lookup.
+        $lead_id          = 0;
+        $lead_name        = $client_name;
+        $lead_phone       = $client_phone;
+        $resolved_call_id = $call_id;
+
+        // Priority 1: explicit leadId in payload
+        if (!empty($args['leadId'])) {
+            $q = $this->db->query("SELECT id, name, phonenumber, vapi_call_id FROM tblleads WHERE id = ? LIMIT 1", [(int)$args['leadId']]);
+            if ($q && $q->num_rows()) {
+                $r = $q->row_array();
+                $lead_id          = (int) $r['id'];
+                $lead_name        = $r['name']        ?: $client_name;
+                $lead_phone       = ($r['phonenumber'] && strtolower($r['phonenumber']) !== 'unknown') ? $r['phonenumber'] : $client_phone;
+                $resolved_call_id = $resolved_call_id ?: ($r['vapi_call_id'] ?: null);
+            }
         }
 
-        $lead_id    = (int) ($lead_row['id'] ?? 0);
-        $lead_name  = $lead_row['name']        ?? $client_name;
-        $lead_phone = $lead_row['phonenumber'] ?? $client_phone;
+        // Priority 2: callId from payload
+        if (!$lead_id && $call_id) {
+            $q = $this->db->query("SELECT id, name, phonenumber FROM tblleads WHERE vapi_call_id = ? LIMIT 1", [$call_id]);
+            if ($q && $q->num_rows()) {
+                $r = $q->row_array();
+                $lead_id    = (int) $r['id'];
+                $lead_name  = $r['name']        ?: $client_name;
+                $lead_phone = ($r['phonenumber'] && strtolower($r['phonenumber']) !== 'unknown') ? $r['phonenumber'] : $client_phone;
+            }
+        }
+
+        // Priority 3: most recently called lead in last 30 minutes
+        if (!$lead_id) {
+            $old_debug = $this->db->db_debug;
+            $this->db->db_debug = false;
+            $q = $this->db->query("
+                SELECT id, name, phonenumber, vapi_call_id
+                FROM tblleads
+                WHERE ai_call_status IN ('called', 'callback_scheduled')
+                  AND last_ai_call >= NOW() - INTERVAL 30 MINUTE
+                ORDER BY last_ai_call DESC
+                LIMIT 1
+            ");
+            $this->db->db_debug = $old_debug;
+            if ($q && $q->num_rows()) {
+                $r = $q->row_array();
+                $lead_id          = (int) $r['id'];
+                $lead_name        = $r['name']        ?: $client_name;
+                $lead_phone       = ($r['phonenumber'] && strtolower($r['phonenumber']) !== 'unknown') ? $r['phonenumber'] : $client_phone;
+                $resolved_call_id = $resolved_call_id ?: ($r['vapi_call_id'] ?: null);
+            } else {
+                file_put_contents($log_file, '[' . date('Y-m-d H:i:s') . '] WARN: recency fallback found no lead' . "\n", FILE_APPEND);
+            }
+        }
 
         // Insert meeting booking record
         $this->ai_calling_model->insert_meeting_booking(
-            $lead_id, $lead_name, $lead_phone, (string) $call_id, $meeting_notes
+            $lead_id, $lead_name, $lead_phone, (string) $resolved_call_id, $meeting_notes
         );
 
         // Update lead status — also change CRM status to "Meeting Booked"
-        if ($call_id) {
+        $update_key = $resolved_call_id ?: null;
+        if ($lead_id || $update_key) {
             $meeting_status_id = $this->ai_calling_model->get_lead_status_id_by_name('Meeting Booked');
             $fields = [
                 'ai_call_status'  => 'meeting_booked',
@@ -584,8 +603,94 @@ class Ai_calling extends AdminController
             if ($meeting_status_id) {
                 $fields['status'] = $meeting_status_id;
             }
-            $this->ai_calling_model->update_lead_from_webhook($call_id, $fields);
+            if ($update_key) {
+                $this->ai_calling_model->update_lead_from_webhook($update_key, $fields);
+            } elseif ($lead_id) {
+                $this->db->where('id', $lead_id)->update('tblleads', $fields);
+            }
         }
+
+        file_put_contents($log_file,
+            '[' . date('Y-m-d H:i:s') . '] CTRL SAVED lead_id=' . $lead_id . ' call_id=' . $resolved_call_id . ' name=' . $lead_name . "\n",
+            FILE_APPEND);
+
+        // Respond AFTER all DB work is done
+        $tool_call_id = $data['message']['toolCalls'][0]['id'] ?? $data['toolCallId'] ?? null;
+        $response = $tool_call_id
+            ? ['results' => [['toolCallId' => $tool_call_id, 'result' => 'Meeting booked successfully.']]]
+            : ['status' => 'ok'];
+
+        header('Content-Type: application/json');
+        echo json_encode($response);
+    }
+
+    /**
+     * Fetches transcript and recording URL from Vapi API for a given call.
+     * Called via AJAX from the AI Call history tab when transcript is missing.
+     * Vapi generates transcripts ~5-10 seconds after a call ends.
+     *
+     * POST admin/ai_calling/fetch_transcript
+     * Body: call_id (vapi UUID)
+     */
+    public function fetch_transcript(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+            return;
+        }
+
+        $call_id = $this->input->post('call_id');
+        if (!$call_id) {
+            echo json_encode(['success' => false, 'message' => 'Missing call_id']);
+            return;
+        }
+
+        $ch = curl_init('https://api.vapi.ai/call/' . urlencode($call_id));
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . AI_VAPI_API_KEY],
+            CURLOPT_TIMEOUT        => 10,
+        ]);
+        $resp      = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code !== 200 || !$resp) {
+            echo json_encode(['success' => false, 'message' => 'Vapi API returned ' . $http_code]);
+            return;
+        }
+
+        $vapi = json_decode($resp, true) ?? [];
+
+        $transcript_raw = $vapi['artifact']['transcript'] ?? $vapi['transcript'] ?? '';
+        if (is_array($transcript_raw)) {
+            $transcript = implode("\n", array_map(function ($m) {
+                $role = ucfirst($m['role'] ?? 'system');
+                $text = $m['message'] ?? $m['content'] ?? $m['text'] ?? '';
+                return "{$role}: {$text}";
+            }, $transcript_raw));
+        } else {
+            $transcript = (string) $transcript_raw;
+        }
+
+        $recording = $vapi['artifact']['recordingUrl'] ?? $vapi['recordingUrl'] ?? null;
+
+        if ($transcript === '' && $recording === null) {
+            echo json_encode(['success' => false, 'message' => 'Transcript not ready yet — try again in a few seconds.']);
+            return;
+        }
+
+        // Persist to DB
+        $update = [];
+        if ($transcript !== '') { $update['ai_call_summary']    = $transcript; }
+        if ($recording !== null) { $update['call_recording_url'] = $recording; }
+        if (!empty($update)) {
+            $this->ai_calling_model->update_lead_from_webhook($call_id, $update);
+        }
+
+        echo json_encode(['success' => true, 'transcript' => $transcript, 'recording_url' => $recording]);
     }
 
     public function webhook(): void
