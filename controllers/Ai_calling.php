@@ -538,10 +538,12 @@ class Ai_calling extends AdminController
             FILE_APPEND
         );
 
-        // Extract tool arguments (clientName, clientPhone, meetingDetails)
-        $args = $data['message']['toolCalls'][0]['function']['arguments']
+        // Extract tool arguments (clientName, clientPhone, meetingDetails).
+        // Vapi sends function.arguments as a JSON-encoded string — decode it.
+        $raw_args = $data['message']['toolCalls'][0]['function']['arguments']
             ?? $data['arguments']
             ?? [];
+        $args = is_string($raw_args) ? (json_decode($raw_args, true) ?? []) : (array) $raw_args;
 
         $call         = $data['message']['call'] ?? $data['call'] ?? [];
         $call_id      = $call['id'] ?? null;
@@ -623,11 +625,26 @@ class Ai_calling extends AdminController
         $msg_type     = $data['message']['type']          ?? $data['type']          ?? null;
         $call         = $data['message']['call']          ?? $data['call']          ?? [];
         $call_id      = $call['id']                       ?? null;
-        // Vapi may put the transcript at message.transcript or message.artifact.transcript
-        $transcript   = $data['message']['transcript']              ?? $data['message']['artifact']['transcript'] ?? $data['transcript'] ?? '';
-        $recording    = $data['message']['recordingUrl']            ?? $data['message']['artifact']['recordingUrl'] ?? $call['recordingUrl'] ?? null;
-        $summary      = $data['message']['summary']                 ?? $data['summary']      ?? null;
-        $ended_reason = $data['message']['endedReason']             ?? $data['endedReason']   ?? null;
+
+        // Transcript may be a flat string or a structured array of {role, message} objects.
+        // Also check message.artifact.transcript — Vapi's preferred location in newer payloads.
+        $transcript_raw = $data['message']['artifact']['transcript']
+            ?? $data['message']['transcript']
+            ?? $data['transcript']
+            ?? '';
+        if (is_array($transcript_raw)) {
+            $transcript = implode("\n", array_map(function ($msg) {
+                $role = isset($msg['role']) ? ucfirst($msg['role']) : 'System';
+                $text = $msg['message'] ?? $msg['content'] ?? $msg['text'] ?? '';
+                return "{$role}: {$text}";
+            }, $transcript_raw));
+        } else {
+            $transcript = (string) $transcript_raw;
+        }
+
+        $recording    = $data['message']['artifact']['recordingUrl'] ?? $data['message']['recordingUrl'] ?? $call['recordingUrl'] ?? null;
+        $summary      = $data['message']['summary']                  ?? $data['summary']      ?? null;
+        $ended_reason = $data['message']['endedReason']              ?? $data['endedReason']  ?? null;
 
         // ── Tool calls: exit early so live-call events don't corrupt lead data ──
         // Vapi fires tool-calls events mid-call (empty transcript). Processing them
@@ -651,6 +668,29 @@ class Ai_calling extends AdminController
                 // bookMeeting is handled by the standalone book_meeting.php endpoint
             }
             return; // never process tool-call events as end-of-call
+        }
+
+        // ── Terminal-status guard ────────────────────────────────────────────────
+        // If book_meeting.php or notify_expert already set a final outcome on the
+        // lead (meeting_booked, expert_requested), the end-of-call-report must NOT
+        // overwrite it with a keyword-detection result that may be wrong or empty.
+        // We still save the transcript and recording so they appear in the UI.
+        if ($call_id) {
+            $old_debug = $this->db->db_debug;
+            $this->db->db_debug = false;
+            $q_cs = $this->db->select('ai_call_status')->where('vapi_call_id', $call_id)->get('tblleads');
+            $this->db->db_debug = $old_debug;
+            $current_ai_status = ($q_cs && $q_cs->num_rows()) ? ($q_cs->row()->ai_call_status ?? '') : '';
+
+            if (in_array($current_ai_status, ['meeting_booked', 'expert_requested'], true)) {
+                $preserve = [];
+                if ($transcript !== '') { $preserve['ai_call_summary']    = $transcript; }
+                if ($recording  !== null) { $preserve['call_recording_url'] = $recording; }
+                if (!empty($preserve)) {
+                    $this->ai_calling_model->update_lead_from_webhook($call_id, $preserve);
+                }
+                return;
+            }
         }
 
         // Exact endedReason values that mean the human was never reached.

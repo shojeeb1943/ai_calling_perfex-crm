@@ -105,26 +105,46 @@ if ($call_id) {
 // ── Insert booking ────────────────────────────────────────────────────────────
 $notes = $meeting_detail
     ? mb_substr($meeting_detail, 0, 1000)
-    : mb_substr($raw, 0, 500);
+    : 'Client confirmed meeting.';
 
-$pdo->prepare("
-    INSERT INTO tblai_meeting_bookings
-        (lead_id, lead_name, lead_phone, vapi_call_id, booking_notes, created_at)
-    VALUES (?, ?, ?, ?, ?, NOW())
-")->execute([$lead_id, $lead_name, $lead_phone, $call_id, $notes]);
-
-// ── Update lead status — also set CRM status to Meeting Booked (id=10) ────────
-if ($call_id) {
+try {
     $pdo->prepare("
-        UPDATE tblleads
-        SET ai_call_status  = 'meeting_booked',
-            ai_call_summary = ?,
-            status          = 10
-        WHERE vapi_call_id = ?
-    ")->execute([
-        'Meeting booked — ' . ($meeting_detail ?? 'Client confirmed.'),
-        $call_id,
-    ]);
+        INSERT INTO tblai_meeting_bookings
+            (lead_id, lead_name, lead_phone, vapi_call_id, booking_notes, created_at)
+        VALUES (?, ?, ?, ?, ?, NOW())
+    ")->execute([$lead_id, $lead_name, $lead_phone, $call_id, $notes]);
+} catch (Exception $e) {
+    file_put_contents($log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
+        '[' . date('Y-m-d H:i:s') . '] INSERT ERROR: ' . $e->getMessage() . "\n", FILE_APPEND);
+}
+
+// ── Update lead status — look up "Meeting Booked" status ID dynamically ───────
+if ($call_id) {
+    // Dynamic lookup so the correct CRM status ID is used regardless of installation
+    $mtg_status_id = null;
+    try {
+        $st2 = $pdo->prepare("SELECT id FROM tblleads_status WHERE LOWER(`name`) = 'meeting booked' LIMIT 1");
+        $st2->execute();
+        $sr = $st2->fetch(PDO::FETCH_ASSOC);
+        if ($sr) { $mtg_status_id = (int) $sr['id']; }
+    } catch (Exception $e) { /* ignore — CRM status update is non-critical */ }
+
+    $status_sql = $mtg_status_id ? ", status = {$mtg_status_id}" : '';
+    try {
+        $pdo->prepare("
+            UPDATE tblleads
+            SET ai_call_status  = 'meeting_booked',
+                ai_call_summary = ?
+                {$status_sql}
+            WHERE vapi_call_id  = ?
+        ")->execute([
+            'Meeting booked — ' . ($meeting_detail ?? 'Client confirmed.'),
+            $call_id,
+        ]);
+    } catch (Exception $e) {
+        file_put_contents($log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
+            '[' . date('Y-m-d H:i:s') . '] UPDATE ERROR: ' . $e->getMessage() . "\n", FILE_APPEND);
+    }
 }
 
 file_put_contents($log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
