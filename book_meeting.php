@@ -42,15 +42,23 @@ file_put_contents(
 );
 
 // ── Extract client info ───────────────────────────────────────────────────────
-$client_name    = $data['clientName']     ?? $data['client_name']     ?? 'Unknown';
-$client_phone   = $data['clientPhone']    ?? $data['client_phone']    ?? '';
-$meeting_detail = $data['meetingDetails'] ?? $data['meeting_details'] ?? null;
-$call_id        = $data['call']['id']     ?? $data['callId']          ?? null;
+// Vapi sends tool arguments nested under message.toolCalls[0].function.arguments
+// (may be a JSON string). Fall back to flat root-level keys for other senders.
+$args = $data['message']['toolCalls'][0]['function']['arguments'] ?? [];
+if (is_string($args)) {
+    $args = json_decode($args, true) ?? [];
+}
+
+$client_name    = $args['clientName']     ?? $data['clientName']     ?? $data['client_name']     ?? 'Unknown';
+$client_phone   = $args['clientPhone']    ?? $data['clientPhone']    ?? $data['client_phone']    ?? '';
+$meeting_detail = $args['meetingDetails'] ?? $data['meetingDetails'] ?? $data['meeting_details'] ?? null;
+$call_id        = $data['message']['call']['id'] ?? $data['call']['id'] ?? $data['callId'] ?? null;
 
 // ── DB: define BASEPATH so CI config files don't exit() ──────────────────────
 if (!defined('BASEPATH')) define('BASEPATH', 'standalone');
 
-$db_cfg_path = __DIR__ . '/../../../application/config/database.php';
+// modules/ai_calling/ → modules/ → CRM root → application/config/database.php
+$db_cfg_path = __DIR__ . '/../../application/config/database.php';
 if (!file_exists($db_cfg_path)) {
     file_put_contents($log_dir . 'book_meeting_' . date('Y-m-d') . '.log',
         '[' . date('Y-m-d H:i:s') . '] ERROR: DB config not found' . "\n", FILE_APPEND);

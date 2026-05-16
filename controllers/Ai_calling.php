@@ -623,18 +623,21 @@ class Ai_calling extends AdminController
         $msg_type     = $data['message']['type']          ?? $data['type']          ?? null;
         $call         = $data['message']['call']          ?? $data['call']          ?? [];
         $call_id      = $call['id']                       ?? null;
-        $transcript   = $data['message']['transcript']    ?? $data['transcript']    ?? '';
-        $recording    = $data['message']['recordingUrl']  ?? $call['recordingUrl']  ?? null;
-        $summary      = $data['message']['summary']      ?? $data['summary']      ?? null;
-        $ended_reason = $data['message']['endedReason']   ?? $data['endedReason']   ?? null;
+        // Vapi may put the transcript at message.transcript or message.artifact.transcript
+        $transcript   = $data['message']['transcript']              ?? $data['message']['artifact']['transcript'] ?? $data['transcript'] ?? '';
+        $recording    = $data['message']['recordingUrl']            ?? $data['message']['artifact']['recordingUrl'] ?? $call['recordingUrl'] ?? null;
+        $summary      = $data['message']['summary']                 ?? $data['summary']      ?? null;
+        $ended_reason = $data['message']['endedReason']             ?? $data['endedReason']   ?? null;
 
-        // ── Tool call: notifyExpert ──────────────────────────────────────────────
-        // Vapi fires this when AI calls the notifyExpert tool during a live call.
-        // We send a WhatsApp notification to the owner and update the lead status.
+        // ── Tool calls: exit early so live-call events don't corrupt lead data ──
+        // Vapi fires tool-calls events mid-call (empty transcript). Processing them
+        // as end-of-call events would overwrite ai_call_summary with '' and set the
+        // wrong status. Handle known tools, then return for ALL tool-calls events.
         if ($msg_type === 'tool-calls') {
             $tool_calls = $data['message']['toolCalls'] ?? [];
             foreach ($tool_calls as $tool) {
-                if (($tool['function']['name'] ?? '') === 'notifyExpert') {
+                $tool_name = $tool['function']['name'] ?? '';
+                if ($tool_name === 'notifyExpert') {
                     $client_name   = $call['customer']['name']   ?? ($tool['function']['arguments']['clientName'] ?? 'Unknown');
                     $client_phone  = $call['customer']['number'] ?? ($tool['function']['arguments']['clientPhone'] ?? '');
                     $this->_send_whatsapp_expert_request($client_name, $client_phone);
@@ -644,9 +647,10 @@ class Ai_calling extends AdminController
                             'ai_call_summary' => 'Client requested expert — WhatsApp sent to owner.',
                         ]);
                     }
-                    return; // early exit — no further processing needed for tool calls
                 }
+                // bookMeeting is handled by the standalone book_meeting.php endpoint
             }
+            return; // never process tool-call events as end-of-call
         }
 
         // Exact endedReason values that mean the human was never reached.
@@ -746,7 +750,9 @@ class Ai_calling extends AdminController
                     $status     = 'not_interested';
                     $crm_status = null; // leave CRM status unchanged
                 } elseif ($is_meeting_booked) {
-                    // Client confirmed a meeting during the call → store booking record
+                    // Client confirmed a meeting during the call → store booking record.
+                    // book_meeting.php (called by the Vapi tool) may have already inserted one;
+                    // only insert here when no record exists for this call yet.
                     $status     = 'meeting_booked';
                     $crm_status = $this->ai_calling_model->get_lead_status_id_by_name('Meeting Booked') ?: 12;
                     $lead_row = [];
@@ -754,13 +760,18 @@ class Ai_calling extends AdminController
                         $q = $this->db->query("SELECT id, phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
                         $lead_row = ($q && $q->num_rows()) ? $q->row_array() : [];
                     }
-                    $book_lead_id = (int) ($lead_row['id'] ?? 0);
-                    $book_name    = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
-                    $book_phone   = $lead_row['phonenumber'] ?? ($call['customer']['number'] ?? '');
-                    $this->ai_calling_model->insert_meeting_booking(
-                        $book_lead_id, $book_name, $book_phone, $call_id,
-                        $transcript
-                    );
+                    $existing_q = $call_id
+                        ? $this->db->query("SELECT id FROM tblai_meeting_bookings WHERE vapi_call_id = ? LIMIT 1", [$call_id])
+                        : null;
+                    if (!$existing_q || !$existing_q->num_rows()) {
+                        $book_lead_id = (int) ($lead_row['id'] ?? 0);
+                        $book_name    = $lead_row['name']        ?? ($call['customer']['name']   ?? 'Unknown');
+                        $book_phone   = $lead_row['phonenumber'] ?? ($call['customer']['number'] ?? '');
+                        $this->ai_calling_model->insert_meeting_booking(
+                            $book_lead_id, $book_name, $book_phone, $call_id,
+                            $transcript
+                        );
+                    }
                 } elseif ($is_expert_request) {
                     // Client requested human expert — notify owner via Telegram
                     $status = 'expert_requested';
@@ -787,11 +798,16 @@ class Ai_calling extends AdminController
                     $status = 'callback_scheduled';
                 }
 
-                $fields = [
-                    'ai_call_status'     => $status,
-                    'ai_call_summary'    => $transcript,
-                    'call_recording_url' => $recording,
-                ];
+                $fields = ['ai_call_status' => $status];
+                // Only overwrite transcript and recording when Vapi provides them.
+                // An empty transcript (e.g. from a mid-call tool event) would otherwise
+                // erase a transcript already saved by a previous webhook.
+                if ($transcript !== '') {
+                    $fields['ai_call_summary'] = $transcript;
+                }
+                if ($recording !== null) {
+                    $fields['call_recording_url'] = $recording;
+                }
 
                 // Schedule followup date:
                 //   explicit callback/interested → wait AI_FOLLOWUP_DAYS (default 5 days)
