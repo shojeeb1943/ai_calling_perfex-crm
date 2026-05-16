@@ -895,6 +895,30 @@ class Ai_calling extends AdminController
             $skipped[] = 'tblai_meeting_bookings (table)';
         }
 
+        // Also create the call history table if it doesn't exist
+        if (!$this->db->table_exists('tblai_call_history')) {
+            $charset = $this->db->char_set ?: 'utf8';
+            $this->db->query("
+                CREATE TABLE IF NOT EXISTS `tblai_call_history` (
+                    `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+                    `lead_id`       INT(11)      NOT NULL,
+                    `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
+                    `status`        VARCHAR(30)  NOT NULL DEFAULT 'called',
+                    `ended_reason`  VARCHAR(100) DEFAULT NULL,
+                    `transcript`    TEXT         NULL,
+                    `recording_url` VARCHAR(500) DEFAULT NULL,
+                    `called_at`     DATETIME     NOT NULL,
+                    `updated_at`    DATETIME     DEFAULT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `idx_lead_id` (`lead_id`),
+                    KEY `idx_vapi_call_id` (`vapi_call_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
+            ");
+            $added[] = 'tblai_call_history (table)';
+        } else {
+            $skipped[] = 'tblai_call_history (table)';
+        }
+
         echo json_encode([
             'success' => true,
             'added'   => $added,

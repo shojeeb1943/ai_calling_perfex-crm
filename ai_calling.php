@@ -208,35 +208,35 @@ function ai_calling_lead_tab_content($lead): void
         return;
     }
 
-    $CI = &get_instance();
+    $CI     = &get_instance();
+    $lead_id = (int) $lead->id;
 
-    // Guard: columns may not exist on installs that never ran the migration
-    $old_debug = $CI->db->db_debug;
-    $CI->db->db_debug = false;
-    $has_summary   = $CI->db->field_exists('ai_call_summary',    'tblleads');
-    $has_recording = $CI->db->field_exists('call_recording_url', 'tblleads');
-    $has_status    = $CI->db->field_exists('ai_call_status',     'tblleads');
-    $CI->db->db_debug = $old_debug;
-
-    if (!$has_summary && !$has_recording) {
-        return;
+    // Load model if not already loaded (hook fires outside the AI Calling controller)
+    if (!isset($CI->ai_calling_model)) {
+        $CI->load->model('ai_calling/ai_calling_model');
     }
 
-    $select = 'last_ai_call, followup_count';
-    if ($has_status)    { $select .= ', ai_call_status'; }
-    if ($has_summary)   { $select .= ', ai_call_summary'; }
-    if ($has_recording) { $select .= ', call_recording_url'; }
-
+    // Current lead state (for the status badge at the top)
+    $old_debug = $CI->db->db_debug;
     $CI->db->db_debug = false;
-    $q   = $CI->db->select($select)->where('id', (int) $lead->id)->get('tblleads');
+    $has_status = $CI->db->field_exists('ai_call_status', 'tblleads');
     $CI->db->db_debug = $old_debug;
-    $row = ($q && $q->num_rows()) ? $q->row_array() : [];
 
-    $transcript   = $row['ai_call_summary']    ?? '';
-    $recording    = $row['call_recording_url'] ?? '';
-    $status       = $row['ai_call_status']     ?? '';
-    $last_call    = $row['last_ai_call']        ?? '';
-    $attempts     = (int) ($row['followup_count'] ?? 0);
+    $status = '';
+    $attempts = 0;
+    if ($has_status) {
+        $CI->db->db_debug = false;
+        $q = $CI->db->select('ai_call_status, followup_count')->where('id', $lead_id)->get('tblleads');
+        $CI->db->db_debug = $old_debug;
+        if ($q && $q->num_rows()) {
+            $r        = $q->row_array();
+            $status   = $r['ai_call_status']  ?? '';
+            $attempts = (int) ($r['followup_count'] ?? 0);
+        }
+    }
+
+    // Fetch all per-attempt records from history table
+    $history = $CI->ai_calling_model->get_call_history_for_lead($lead_id);
 
     $status_labels = [
         'pending'            => ['label' => 'Pending',          'class' => 'default'],
@@ -248,74 +248,109 @@ function ai_calling_lead_tab_content($lead): void
         'expert_requested'   => ['label' => 'Expert Requested', 'class' => 'warning'],
         'failed'             => ['label' => 'Failed',           'class' => 'danger'],
     ];
-    $badge = $status_labels[$status] ?? ['label' => ucfirst($status ?: 'Not Called'), 'class' => 'default'];
-
+    $badge        = $status_labels[$status] ?? ['label' => ucfirst($status ?: 'Not Called'), 'class' => 'default'];
     $call_now_url = admin_url('ai_calling/call_lead_now');
-    $lead_id_js   = (int) $lead->id;
     ?>
     <div role="tabpanel" class="tab-pane" id="ai_call_history">
         <div style="padding:20px;">
 
-            <!-- Call Now button — always visible -->
-            <div style="margin-bottom:20px;">
+            <!-- Call Now button + current status -->
+            <div style="margin-bottom:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
                 <button type="button"
-                        id="ai-call-now-btn-<?php echo $lead_id_js; ?>"
+                        id="ai-call-now-btn-<?php echo $lead_id; ?>"
                         class="btn btn-success"
-                        onclick="aiCallingCallNow(<?php echo $lead_id_js; ?>)">
+                        onclick="aiCallingCallNow(<?php echo $lead_id; ?>)">
                     <i class="fa fa-phone"></i> Call Now
                 </button>
-                <span id="ai-call-now-msg-<?php echo $lead_id_js; ?>"
-                      style="margin-left:12px;font-size:13px;"></span>
+                <?php if ($status): ?>
+                <span>
+                    <strong>Status:</strong>
+                    <span class="label label-<?php echo $badge['class']; ?>" style="font-size:12px;">
+                        <?php echo htmlspecialchars($badge['label']); ?>
+                    </span>
+                </span>
+                <?php endif; ?>
+                <?php if ($attempts): ?>
+                <span class="text-muted" style="font-size:13px;">
+                    <i class="fa fa-repeat"></i> <?php echo $attempts; ?> attempt<?php echo $attempts !== 1 ? 's' : ''; ?>
+                </span>
+                <?php endif; ?>
+                <span id="ai-call-now-msg-<?php echo $lead_id; ?>" style="font-size:13px;"></span>
             </div>
 
-            <?php if (!$last_call && !$transcript): ?>
+            <?php if (empty($history)): ?>
                 <p class="text-muted" style="padding:10px 0 0;">
                     <i class="fa fa-info-circle"></i> No call history yet for this lead.
                 </p>
             <?php else: ?>
 
-                <!-- Meta row -->
-                <div style="margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
-                    <?php if ($status): ?>
-                    <span>
-                        <strong>Status:</strong>
-                        <span class="label label-<?php echo $badge['class']; ?>" style="font-size:12px;">
-                            <?php echo htmlspecialchars($badge['label']); ?>
-                        </span>
-                    </span>
-                    <?php endif; ?>
-                    <?php if ($last_call): ?>
-                    <span class="text-muted" style="font-size:13px;">
-                        <i class="fa fa-clock-o"></i>
-                        Last call: <?php echo date('d M Y H:i', strtotime($last_call)); ?>
-                    </span>
-                    <?php endif; ?>
-                    <?php if ($attempts): ?>
-                    <span class="text-muted" style="font-size:13px;">
-                        <i class="fa fa-repeat"></i>
-                        Attempts: <?php echo $attempts; ?>
-                    </span>
-                    <?php endif; ?>
-                </div>
-
-                <!-- Recording player -->
-                <?php if ($recording): ?>
-                <div style="margin-bottom:16px;">
-                    <audio controls style="width:100%;max-width:600px;">
-                        <source src="<?php echo htmlspecialchars($recording); ?>">
-                    </audio>
-                </div>
-                <?php endif; ?>
-
-                <!-- Transcript -->
-                <?php if ($transcript): ?>
-                <div>
-                    <strong style="display:block;margin-bottom:6px;">
-                        <i class="fa fa-file-text-o"></i> Call Transcript
-                    </strong>
-                    <pre style="white-space:pre-wrap;word-break:break-word;background:#f8f8f8;padding:14px;border-radius:4px;font-size:13px;max-height:400px;overflow-y:auto;border:1px solid #e5e5e5;"><?php echo htmlspecialchars($transcript); ?></pre>
-                </div>
-                <?php endif; ?>
+                <!-- History table -->
+                <table class="table table-condensed table-bordered" style="font-size:13px;margin-bottom:0;">
+                    <thead>
+                        <tr style="background:#f5f5f5;">
+                            <th style="width:36px;text-align:center;">#</th>
+                            <th>Date &amp; Time</th>
+                            <th>Outcome</th>
+                            <th>Ended Reason</th>
+                            <th>Recording</th>
+                            <th>Transcript</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php
+                    $total_rows = count($history);
+                    foreach ($history as $i => $call):
+                        $attempt_num  = $total_rows - $i; // oldest = #1
+                        $row_status   = $call['status'] ?? 'called';
+                        $row_badge    = $status_labels[$row_status] ?? ['label' => ucfirst($row_status), 'class' => 'default'];
+                        $row_rec      = $call['recording_url'] ?? '';
+                        $row_trans    = trim($call['transcript'] ?? '');
+                        $row_reason   = $call['ended_reason']   ?? '';
+                        $row_date     = $call['called_at']       ?? '';
+                        $row_updated  = $call['updated_at']      ?? '';
+                        $display_date = $row_updated ?: $row_date;
+                        $trans_id     = 'ach-trans-' . $lead_id . '-' . $i;
+                    ?>
+                        <tr>
+                            <td style="text-align:center;font-weight:600;"><?php echo $attempt_num; ?></td>
+                            <td style="white-space:nowrap;">
+                                <?php echo $display_date ? date('d M Y', strtotime($display_date)) : '—'; ?><br>
+                                <span class="text-muted"><?php echo $display_date ? date('H:i:s', strtotime($display_date)) : ''; ?></span>
+                            </td>
+                            <td>
+                                <span class="label label-<?php echo $row_badge['class']; ?>">
+                                    <?php echo htmlspecialchars($row_badge['label']); ?>
+                                </span>
+                            </td>
+                            <td class="text-muted">
+                                <?php echo $row_reason ? htmlspecialchars($row_reason) : '—'; ?>
+                            </td>
+                            <td>
+                                <?php if ($row_rec): ?>
+                                    <audio controls style="width:160px;vertical-align:middle;">
+                                        <source src="<?php echo htmlspecialchars($row_rec); ?>">
+                                    </audio>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($row_trans): ?>
+                                    <span style="cursor:pointer;color:#337ab7;"
+                                          onclick="document.getElementById('<?php echo $trans_id; ?>').style.display=document.getElementById('<?php echo $trans_id; ?>').style.display==='none'?'block':'none'">
+                                        <i class="fa fa-file-text-o"></i>
+                                        <?php echo htmlspecialchars(mb_substr($row_trans, 0, 60)) . (mb_strlen($row_trans) > 60 ? '…' : ''); ?>
+                                    </span>
+                                    <pre id="<?php echo $trans_id; ?>"
+                                         style="display:none;margin-top:8px;white-space:pre-wrap;word-break:break-word;background:#f8f8f8;padding:10px;border-radius:4px;font-size:12px;max-height:300px;overflow-y:auto;border:1px solid #e5e5e5;"><?php echo htmlspecialchars($row_trans); ?></pre>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
 
             <?php endif; ?>
 

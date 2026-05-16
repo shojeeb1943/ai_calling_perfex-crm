@@ -94,6 +94,29 @@ if (!$CI->db->table_exists('tblai_meeting_bookings')) {
     log_message('info', '[ai_calling] Created table tblai_meeting_bookings');
 }
 
+// ─── Call history table ───────────────────────────────────────────────────────
+
+if (!$CI->db->table_exists('tblai_call_history')) {
+    $charset = $CI->db->char_set ?: 'utf8';
+    $CI->db->query("
+        CREATE TABLE IF NOT EXISTS `tblai_call_history` (
+            `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+            `lead_id`       INT(11)      NOT NULL,
+            `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
+            `status`        VARCHAR(30)  NOT NULL DEFAULT 'called',
+            `ended_reason`  VARCHAR(100) DEFAULT NULL,
+            `transcript`    TEXT         NULL,
+            `recording_url` VARCHAR(500) DEFAULT NULL,
+            `called_at`     DATETIME     NOT NULL,
+            `updated_at`    DATETIME     DEFAULT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_lead_id` (`lead_id`),
+            KEY `idx_vapi_call_id` (`vapi_call_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
+    ");
+    log_message('info', '[ai_calling] Created table tblai_call_history');
+}
+
 // ─── Logs directory ───────────────────────────────────────────────────────────
 
 /**

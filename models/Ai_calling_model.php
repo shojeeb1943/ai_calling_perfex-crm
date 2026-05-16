@@ -49,6 +49,35 @@ class Ai_calling_model extends App_Model
             // Never let table provisioning crash the page — the meetings()
             // controller has its own degradation path.
         }
+        try {
+            $this->_ensure_history_table();
+        } catch (\Throwable $e) {
+            // Same — never crash CRM over a missing history table.
+        }
+    }
+
+    private function _ensure_history_table(): void
+    {
+        $charset   = $this->db->char_set ?: 'utf8';
+        $old_debug = $this->db->db_debug;
+        $this->db->db_debug = false;
+        $this->db->query("
+            CREATE TABLE IF NOT EXISTS `tblai_call_history` (
+                `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+                `lead_id`       INT(11)      NOT NULL,
+                `vapi_call_id`  VARCHAR(100) DEFAULT NULL,
+                `status`        VARCHAR(30)  NOT NULL DEFAULT 'called',
+                `ended_reason`  VARCHAR(100) DEFAULT NULL,
+                `transcript`    TEXT         NULL,
+                `recording_url` VARCHAR(500) DEFAULT NULL,
+                `called_at`     DATETIME     NOT NULL,
+                `updated_at`    DATETIME     DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                KEY `idx_lead_id` (`lead_id`),
+                KEY `idx_vapi_call_id` (`vapi_call_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET={$charset}
+        ");
+        $this->db->db_debug = $old_debug;
     }
 
     private function _ensure_meetings_table(): void
@@ -234,14 +263,31 @@ class Ai_calling_model extends App_Model
 
         $new_count = $row ? ((int) $row->followup_count + 1) : 1;
 
+        $now = date('Y-m-d H:i:s');
+
         $this->db->where('id', $lead_id);
         $this->db->update('tblleads', [
             'ai_call_status'     => 'called',
             'vapi_call_id'       => $call_id,
-            'last_ai_call'       => date('Y-m-d H:i:s'),
+            'last_ai_call'       => $now,
             'next_followup_date' => date('Y-m-d', strtotime('+' . (int)(get_option('ai_calling_followup_days') ?: AI_FOLLOWUP_DAYS) . ' days')),
             'followup_count'     => $new_count,
         ]);
+
+        $this->_log_call_to_history($lead_id, $call_id, $now);
+    }
+
+    private function _log_call_to_history(int $lead_id, string $vapi_call_id, string $called_at): void
+    {
+        $old = $this->db->db_debug;
+        $this->db->db_debug = false;
+        $this->db->insert('tblai_call_history', [
+            'lead_id'      => $lead_id,
+            'vapi_call_id' => $vapi_call_id,
+            'status'       => 'called',
+            'called_at'    => $called_at,
+        ]);
+        $this->db->db_debug = $old;
     }
 
     /**
@@ -265,6 +311,34 @@ class Ai_calling_model extends App_Model
     {
         $this->db->where('vapi_call_id', $vapi_call_id);
         $this->db->update('tblleads', $fields);
+        $this->update_call_history_outcome($vapi_call_id, $fields);
+    }
+
+    public function update_call_history_outcome(string $vapi_call_id, array $fields): void
+    {
+        $update = ['updated_at' => date('Y-m-d H:i:s')];
+        if (isset($fields['ai_call_status']))     { $update['status']        = $fields['ai_call_status']; }
+        if (isset($fields['ai_call_summary']))    { $update['transcript']    = $fields['ai_call_summary']; }
+        if (isset($fields['call_recording_url'])) { $update['recording_url'] = $fields['call_recording_url']; }
+        if (isset($fields['ended_reason']))       { $update['ended_reason']  = $fields['ended_reason']; }
+
+        $old = $this->db->db_debug;
+        $this->db->db_debug = false;
+        $this->db->where('vapi_call_id', $vapi_call_id);
+        $this->db->update('tblai_call_history', $update);
+        $this->db->db_debug = $old;
+    }
+
+    public function get_call_history_for_lead(int $lead_id): array
+    {
+        $old = $this->db->db_debug;
+        $this->db->db_debug = false;
+        $q = $this->db->query(
+            'SELECT * FROM tblai_call_history WHERE lead_id = ? ORDER BY called_at DESC',
+            [$lead_id]
+        );
+        $this->db->db_debug = $old;
+        return ($q && $q->num_rows()) ? $q->result_array() : [];
     }
 
     // ─── Meeting bookings ─────────────────────────────────────────────────────
@@ -467,5 +541,10 @@ class Ai_calling_model extends App_Model
 
         $this->db->where('vapi_call_id', $vapi_call_id);
         $this->db->update('tblleads', $fields);
+
+        $this->update_call_history_outcome($vapi_call_id, [
+            'ai_call_status' => 'failed',
+            'ended_reason'   => $reason,
+        ]);
     }
 }
