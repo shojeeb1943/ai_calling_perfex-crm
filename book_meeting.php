@@ -105,12 +105,13 @@ $pdo->prepare("
     VALUES (?, ?, ?, ?, ?, NOW())
 ")->execute([$lead_id, $lead_name, $lead_phone, $call_id, $notes]);
 
-// ── Update lead status ────────────────────────────────────────────────────────
+// ── Update lead status — also set CRM status to Meeting Booked (id=10) ────────
 if ($call_id) {
     $pdo->prepare("
         UPDATE tblleads
         SET ai_call_status  = 'meeting_booked',
-            ai_call_summary = ?
+            ai_call_summary = ?,
+            status          = 10
         WHERE vapi_call_id = ?
     ")->execute([
         'Meeting booked — ' . ($meeting_detail ?? 'Client confirmed.'),
