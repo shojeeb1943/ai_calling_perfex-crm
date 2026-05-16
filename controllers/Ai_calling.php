@@ -649,15 +649,24 @@ class Ai_calling extends AdminController
                     $status = 'callback_scheduled';
                 }
 
+                // Plain completed call with no keyword match but moving to AI Followup —
+                // mark as callback_scheduled so "Start Calling Now" re-queues it immediately.
+                if ($status === 'called' && $crm_status === 12) {
+                    $status = 'callback_scheduled';
+                }
+
                 $fields = [
                     'ai_call_status'     => $status,
                     'ai_call_summary'    => $transcript,
                     'call_recording_url' => $recording,
                 ];
 
-                // Schedule followup date when customer wants a callback or is interested
+                // Schedule followup date:
+                //   explicit callback/interested → wait AI_FOLLOWUP_DAYS (default 5 days)
+                //   plain AI Followup re-queue   → today, so next "Start Calling Now" picks it up
                 if ($status === 'callback_scheduled') {
-                    $fields['next_followup_date'] = date('Y-m-d', strtotime('+' . AI_FOLLOWUP_DAYS . ' days'));
+                    $wait_days = ($is_callback || $is_interested) ? (int)(get_option('ai_calling_followup_days') ?: AI_FOLLOWUP_DAYS) : 0;
+                    $fields['next_followup_date'] = date('Y-m-d', strtotime("+{$wait_days} days"));
                 }
 
                 // Update CRM lead status if outcome requires it
