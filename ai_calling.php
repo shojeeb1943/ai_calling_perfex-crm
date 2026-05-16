@@ -250,14 +250,27 @@ function ai_calling_lead_tab_content($lead): void
     ];
     $badge = $status_labels[$status] ?? ['label' => ucfirst($status ?: 'Not Called'), 'class' => 'default'];
 
+    $call_now_url = admin_url('ai_calling/call_lead_now');
+    $lead_id_js   = (int) $lead->id;
     ?>
     <div role="tabpanel" class="tab-pane" id="ai_call_history">
         <div style="padding:20px;">
 
+            <!-- Call Now button — always visible -->
+            <div style="margin-bottom:20px;">
+                <button type="button"
+                        id="ai-call-now-btn-<?php echo $lead_id_js; ?>"
+                        class="btn btn-success"
+                        onclick="aiCallingCallNow(<?php echo $lead_id_js; ?>)">
+                    <i class="fa fa-phone"></i> Call Now
+                </button>
+                <span id="ai-call-now-msg-<?php echo $lead_id_js; ?>"
+                      style="margin-left:12px;font-size:13px;"></span>
+            </div>
+
             <?php if (!$last_call && !$transcript): ?>
-                <p class="text-muted text-center" style="padding:30px 0;">
-                    <i class="fa fa-phone" style="font-size:28px;opacity:.3;display:block;margin-bottom:8px;"></i>
-                    This lead has not been called yet.
+                <p class="text-muted" style="padding:10px 0 0;">
+                    <i class="fa fa-info-circle"></i> No call history yet for this lead.
                 </p>
             <?php else: ?>
 
@@ -308,6 +321,40 @@ function ai_calling_lead_tab_content($lead): void
 
         </div>
     </div>
+
+    <script>
+    function aiCallingCallNow(leadId) {
+        var btn = document.getElementById('ai-call-now-btn-' + leadId);
+        var msg = document.getElementById('ai-call-now-msg-' + leadId);
+
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Calling...';
+        msg.style.color = '';
+        msg.textContent = '';
+
+        $.post('<?php echo $call_now_url; ?>', {
+            lead_id: leadId,
+            <?php echo $CI->security->get_csrf_token_name(); ?>: '<?php echo $CI->security->get_csrf_hash(); ?>'
+        }, function(res) {
+            if (res.success) {
+                btn.innerHTML = '<i class="fa fa-phone"></i> Call Now';
+                btn.disabled = false;
+                msg.style.color = '#3c763d';
+                msg.innerHTML = '<i class="fa fa-check"></i> ' + res.message;
+            } else {
+                btn.innerHTML = '<i class="fa fa-phone"></i> Call Now';
+                btn.disabled = false;
+                msg.style.color = '#a94442';
+                msg.innerHTML = '<i class="fa fa-times"></i> ' + res.message;
+            }
+        }, 'json').fail(function() {
+            btn.innerHTML = '<i class="fa fa-phone"></i> Call Now';
+            btn.disabled = false;
+            msg.style.color = '#a94442';
+            msg.textContent = 'Request failed. Try again.';
+        });
+    }
+    </script>
     <?php
 }
 

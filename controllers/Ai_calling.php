@@ -316,6 +316,63 @@ class Ai_calling extends AdminController
     }
 
     /**
+     * Calls a single specific lead by ID immediately, bypassing the queue.
+     *
+     * Used by the "Call Now" button on the lead profile AI Call tab.
+     * Respects the same hour-window check as the regular session.
+     *
+     * @route  POST admin/ai_calling/call_lead_now
+     * @return void  Outputs JSON: { success, message, call_id? }
+     */
+    public function call_lead_now(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied']);
+            return;
+        }
+
+        $lead_id = (int) $this->input->post('lead_id');
+        if (!$lead_id) {
+            echo json_encode(['success' => false, 'message' => 'Missing lead_id']);
+            return;
+        }
+
+        $q = $this->db->select('id, name, phonenumber, ai_context_notes, followup_count')
+                      ->where('id', $lead_id)
+                      ->get('tblleads');
+
+        if (!$q || !$q->num_rows()) {
+            echo json_encode(['success' => false, 'message' => 'Lead not found']);
+            return;
+        }
+
+        $lead = $q->row_array();
+
+        if (empty($lead['phonenumber'])) {
+            echo json_encode(['success' => false, 'message' => 'Lead has no phone number']);
+            return;
+        }
+
+        $result = $this->_call_lead($lead);
+
+        if ($result['success']) {
+            $this->ai_calling_model->mark_lead_called($lead_id, $result['call_id']);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Call dispatched to ' . htmlspecialchars($lead['name']),
+                'call_id' => $result['call_id'],
+            ]);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'message' => $result['error'] ?? 'Call failed',
+            ]);
+        }
+    }
+
+    /**
      * Token-authenticated endpoint for scheduled cron jobs.
      *
      * The token in the URL must match AI_CRON_TOKEN; requests with a wrong or
