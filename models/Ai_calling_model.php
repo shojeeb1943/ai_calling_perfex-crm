@@ -319,26 +319,33 @@ class Ai_calling_model extends App_Model
             $has_recording = $this->db->field_exists('call_recording_url', 'tblleads');
 
             $summary_expr   = $has_summary
-                ? 'COALESCE(l1.ai_call_summary, l2.ai_call_summary)'
+                ? 'COALESCE(l1.ai_call_summary, l3.ai_call_summary, l2.ai_call_summary)'
                 : 'NULL';
             $recording_expr = $has_recording
-                ? 'COALESCE(l1.call_recording_url, l2.call_recording_url)'
+                ? 'COALESCE(l1.call_recording_url, l3.call_recording_url, l2.call_recording_url)'
                 : 'NULL';
 
-            // Inline the integer limit — MySQL servers in some configurations
-            // refuse `LIMIT ?` even with CI3's bind substitution.
+            // Three JOIN paths so every booking resolves to a CRM lead:
+            //   l1 — matched by lead_id (set when lead was found during booking)
+            //   l3 — matched by vapi_call_id (covers bookings where lead_id was 0)
+            //   l2 — fallback match by phone number
             $sql = "
                 SELECT
                     m.*,
-                    COALESCE(l1.id, l2.id) AS crm_lead_id,
-                    {$summary_expr}        AS lead_transcript,
-                    {$recording_expr}      AS lead_recording_url
+                    COALESCE(l1.id, l3.id, l2.id) AS crm_lead_id,
+                    COALESCE(l1.name, l3.name, l2.name) AS crm_lead_name,
+                    {$summary_expr}                AS lead_transcript,
+                    {$recording_expr}              AS lead_recording_url
                 FROM  tblai_meeting_bookings m
                 LEFT JOIN tblleads l1
                        ON l1.id = m.lead_id
+                LEFT JOIN tblleads l3
+                       ON l3.vapi_call_id = m.vapi_call_id
+                      AND (m.lead_id IS NULL OR m.lead_id = 0)
                 LEFT JOIN tblleads l2
                        ON l2.phonenumber = m.lead_phone
-                      AND m.lead_id IS NULL
+                      AND (m.lead_id IS NULL OR m.lead_id = 0)
+                      AND m.vapi_call_id IS NULL
                 ORDER BY m.created_at DESC
                 LIMIT {$limit}
             ";
@@ -399,6 +406,26 @@ class Ai_calling_model extends App_Model
             $this->db->db_debug = $old_debug;
             return ['total' => 0, 'today' => 0];
         }
+    }
+
+    /**
+     * Returns the numeric ID of a lead status row by its display name.
+     *
+     * Used to resolve dynamic status names (e.g. "Meeting Booked") without
+     * hardcoding IDs that vary across CRM installations.
+     *
+     * @param  string $name  Exact display name as stored in tblleads_status.name.
+     * @return int           Row ID, or 0 if not found.
+     */
+    public function get_lead_status_id_by_name(string $name): int
+    {
+        $old = $this->db->db_debug;
+        $this->db->db_debug = false;
+        $q = $this->db->select('id')
+            ->where("LOWER(`name`)", strtolower($name))
+            ->get('tblleads_status');
+        $this->db->db_debug = $old;
+        return ($q && $q->num_rows()) ? (int) $q->row()->id : 0;
     }
 
     /**

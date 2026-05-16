@@ -440,12 +440,17 @@ class Ai_calling extends AdminController
             $lead_id, $lead_name, $lead_phone, (string) $call_id, $meeting_notes
         );
 
-        // Update lead status
+        // Update lead status — also change CRM status to "Meeting Booked"
         if ($call_id) {
-            $this->ai_calling_model->update_lead_from_webhook($call_id, [
+            $meeting_status_id = $this->ai_calling_model->get_lead_status_id_by_name('Meeting Booked');
+            $fields = [
                 'ai_call_status'  => 'meeting_booked',
                 'ai_call_summary' => 'Meeting booked — ' . ($meeting_notes ?? 'Client confirmed meeting.'),
-            ]);
+            ];
+            if ($meeting_status_id) {
+                $fields['status'] = $meeting_status_id;
+            }
+            $this->ai_calling_model->update_lead_from_webhook($call_id, $fields);
         }
     }
 
@@ -588,9 +593,11 @@ class Ai_calling extends AdminController
                     || strpos($transcript, 'সাক্ষাৎ করব') !== false
                 );
 
-                // CRM lead status IDs (tblleads_status)
-                // 12 = AI Followup  |  8 = CLOSE CLIENT
-                $crm_status = null;
+                // CRM lead status IDs: 10 = Meeting Booked | 12 = AI Followup
+                // Default: move any AI LEADS (11) lead to AI Followup (12) after
+                // any completed call. meeting_booked overrides to 10; not_interested
+                // leaves CRM status unchanged (null = skip update).
+                $crm_status = 12;
 
                 // ── Expert request keywords (English + Bangla) ───────────────
                 $is_expert_request = (
@@ -604,12 +611,12 @@ class Ai_calling extends AdminController
                 );
 
                 if ($is_not_interested) {
-                    // Not interested → permanently close the lead, stop all calls
                     $status     = 'not_interested';
-                    $crm_status = 8; // CLOSE CLIENT
+                    $crm_status = null; // leave CRM status unchanged
                 } elseif ($is_meeting_booked) {
                     // Client confirmed a meeting during the call → store booking record
-                    $status = 'meeting_booked';
+                    $status     = 'meeting_booked';
+                    $crm_status = $this->ai_calling_model->get_lead_status_id_by_name('Meeting Booked') ?: 12;
                     $lead_row = [];
                     if ($call_id) {
                         $q = $this->db->query("SELECT id, phonenumber, name FROM tblleads WHERE vapi_call_id = ?", [$call_id]);
