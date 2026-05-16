@@ -178,6 +178,139 @@ function ai_calling_deactivation_hook(): void
 hooks()->add_action('admin_init', 'ai_calling_module_init_menu_items');
 hooks()->add_action('admin_init', 'ai_calling_permissions');
 
+// ─── Lead profile: AI Call tab ────────────────────────────────────────────────
+
+hooks()->add_action('after_lead_lead_tabs',    'ai_calling_lead_tab_header');
+hooks()->add_action('after_lead_tabs_content', 'ai_calling_lead_tab_content');
+
+/**
+ * Injects the "AI Call" tab nav item into the lead profile modal.
+ */
+function ai_calling_lead_tab_header($lead): void
+{
+    if (!isset($lead->id)) {
+        return;
+    }
+    echo '<li role="presentation">
+        <a href="#ai_call_history" aria-controls="ai_call_history" role="tab" data-toggle="tab">
+            <i class="fa fa-phone"></i> AI Call
+        </a>
+    </li>';
+}
+
+/**
+ * Renders the AI Call tab panel content inside the lead profile modal.
+ * Silently skips if columns are missing or the lead has never been called.
+ */
+function ai_calling_lead_tab_content($lead): void
+{
+    if (!isset($lead->id)) {
+        return;
+    }
+
+    $CI = &get_instance();
+
+    // Guard: columns may not exist on installs that never ran the migration
+    $old_debug = $CI->db->db_debug;
+    $CI->db->db_debug = false;
+    $has_summary   = $CI->db->field_exists('ai_call_summary',    'tblleads');
+    $has_recording = $CI->db->field_exists('call_recording_url', 'tblleads');
+    $has_status    = $CI->db->field_exists('ai_call_status',     'tblleads');
+    $CI->db->db_debug = $old_debug;
+
+    if (!$has_summary && !$has_recording) {
+        return;
+    }
+
+    $select = 'last_ai_call, followup_count';
+    if ($has_status)    { $select .= ', ai_call_status'; }
+    if ($has_summary)   { $select .= ', ai_call_summary'; }
+    if ($has_recording) { $select .= ', call_recording_url'; }
+
+    $CI->db->db_debug = false;
+    $q   = $CI->db->select($select)->where('id', (int) $lead->id)->get('tblleads');
+    $CI->db->db_debug = $old_debug;
+    $row = ($q && $q->num_rows()) ? $q->row_array() : [];
+
+    $transcript   = $row['ai_call_summary']    ?? '';
+    $recording    = $row['call_recording_url'] ?? '';
+    $status       = $row['ai_call_status']     ?? '';
+    $last_call    = $row['last_ai_call']        ?? '';
+    $attempts     = (int) ($row['followup_count'] ?? 0);
+
+    $status_labels = [
+        'pending'            => ['label' => 'Pending',          'class' => 'default'],
+        'called'             => ['label' => 'Called',           'class' => 'info'],
+        'callback_scheduled' => ['label' => 'Callback',         'class' => 'warning'],
+        'interested'         => ['label' => 'Interested',       'class' => 'success'],
+        'not_interested'     => ['label' => 'Not Interested',   'class' => 'danger'],
+        'meeting_booked'     => ['label' => 'Meeting Booked',   'class' => 'success'],
+        'expert_requested'   => ['label' => 'Expert Requested', 'class' => 'warning'],
+        'failed'             => ['label' => 'Failed',           'class' => 'danger'],
+    ];
+    $badge = $status_labels[$status] ?? ['label' => ucfirst($status ?: 'Not Called'), 'class' => 'default'];
+
+    ?>
+    <div role="tabpanel" class="tab-pane" id="ai_call_history">
+        <div style="padding:20px;">
+
+            <?php if (!$last_call && !$transcript): ?>
+                <p class="text-muted text-center" style="padding:30px 0;">
+                    <i class="fa fa-phone" style="font-size:28px;opacity:.3;display:block;margin-bottom:8px;"></i>
+                    This lead has not been called yet.
+                </p>
+            <?php else: ?>
+
+                <!-- Meta row -->
+                <div style="margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
+                    <?php if ($status): ?>
+                    <span>
+                        <strong>Status:</strong>
+                        <span class="label label-<?php echo $badge['class']; ?>" style="font-size:12px;">
+                            <?php echo htmlspecialchars($badge['label']); ?>
+                        </span>
+                    </span>
+                    <?php endif; ?>
+                    <?php if ($last_call): ?>
+                    <span class="text-muted" style="font-size:13px;">
+                        <i class="fa fa-clock-o"></i>
+                        Last call: <?php echo date('d M Y H:i', strtotime($last_call)); ?>
+                    </span>
+                    <?php endif; ?>
+                    <?php if ($attempts): ?>
+                    <span class="text-muted" style="font-size:13px;">
+                        <i class="fa fa-repeat"></i>
+                        Attempts: <?php echo $attempts; ?>
+                    </span>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Recording player -->
+                <?php if ($recording): ?>
+                <div style="margin-bottom:16px;">
+                    <audio controls style="width:100%;max-width:600px;">
+                        <source src="<?php echo htmlspecialchars($recording); ?>">
+                    </audio>
+                </div>
+                <?php endif; ?>
+
+                <!-- Transcript -->
+                <?php if ($transcript): ?>
+                <div>
+                    <strong style="display:block;margin-bottom:6px;">
+                        <i class="fa fa-file-text-o"></i> Call Transcript
+                    </strong>
+                    <pre style="white-space:pre-wrap;word-break:break-word;background:#f8f8f8;padding:14px;border-radius:4px;font-size:13px;max-height:400px;overflow-y:auto;border:1px solid #e5e5e5;"><?php echo htmlspecialchars($transcript); ?></pre>
+                </div>
+                <?php endif; ?>
+
+            <?php endif; ?>
+
+        </div>
+    </div>
+    <?php
+}
+
 /**
  * Registers the "AI Calling" item in the Perfex CRM admin sidebar.
  *

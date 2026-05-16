@@ -238,11 +238,11 @@
                             <div class="col-md-8">
                                 <h4 class="no-margin">Start Calling Session</h4>
                                 <p class="text-muted" style="margin-bottom:0;">
-                                    Calls up to <strong><?php echo $setting_max_per_run; ?></strong> pending leads now via
-                                    <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip SIP'; ?></strong>.
+                                    One click calls <strong>all pending leads</strong> one by one via
+                                    <strong><?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip SIP'; ?></strong>,
+                                    with <strong><?php echo $setting_delay_sec; ?>s</strong> delay between each call.
                                     Max <strong><?php echo $setting_max_followups; ?></strong> attempts per lead,
                                     followup in <strong><?php echo $setting_followup_days; ?></strong> days.
-                                    Calling hours: <strong><?php echo $setting_hour_start; ?>:00–<?php echo $setting_hour_end; ?>:00</strong>.
                                 </p>
                             </div>
                             <div class="col-md-4 text-right">
@@ -252,13 +252,27 @@
                                         via <?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?>
                                     </small>
                                 </button>
+                                <button id="btn-stop-calling" class="btn btn-danger btn-lg" style="display:none; margin-top:5px;">
+                                    <i class="fa fa-stop"></i> Stop Queue
+                                </button>
                             </div>
+                        </div>
+
+                        <!-- Progress bar -->
+                        <div id="calling-progress" style="display:none; margin-top:15px;">
+                            <div class="progress" style="margin-bottom:6px;">
+                                <div id="calling-progress-bar" class="progress-bar progress-bar-striped active"
+                                     role="progressbar" style="width:0%; min-width:30px;">
+                                    <span id="calling-progress-text">0</span>
+                                </div>
+                            </div>
+                            <small class="text-muted" id="calling-progress-label">Starting…</small>
                         </div>
 
                         <!-- Result area -->
                         <div id="calling-result" style="display:none; margin-top:15px;">
                             <div id="calling-alert" class="alert"></div>
-                            <pre id="calling-log" style="max-height:200px; overflow-y:auto; background:#f5f5f5; padding:10px; border-radius:4px; font-size:12px;"></pre>
+                            <pre id="calling-log" style="max-height:250px; overflow-y:auto; background:#f5f5f5; padding:10px; border-radius:4px; font-size:12px;"></pre>
                         </div>
                     </div>
                 </div>
@@ -454,62 +468,138 @@
 <?php init_tail(); ?>
 
 <script>
-document.getElementById('btn-start-calling').addEventListener('click', function () {
-    var btn    = this;
-    var result = document.getElementById('calling-result');
-    var alert  = document.getElementById('calling-alert');
-    var log    = document.getElementById('calling-log');
+// ── Queue-loop calling ────────────────────────────────────────────────────────
+(function () {
+    var DELAY_MS   = <?php echo (int)$setting_delay_sec * 1000; ?>;
+    var CSRF_NAME  = '<?php echo $this->security->get_csrf_token_name(); ?>';
+    var CSRF_HASH  = '<?php echo $this->security->get_csrf_hash(); ?>';
+    var CALL_URL   = '<?php echo admin_url('ai_calling/call_one_lead'); ?>';
+    var PROVIDER   = '<?php echo $active_provider === 'twilio' ? 'Twilio' : 'Amarip'; ?>';
 
-    btn.disabled    = true;
-    btn.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Calling...<small style="display:block;font-size:11px;font-weight:normal;opacity:0.85;">Dispatching calls, please wait&hellip;</small>';
-    result.style.display = 'none';
+    var stopRequested = false;
+    var totalCalled   = 0;
+    var totalFailed   = 0;
+    var totalStarted  = 0; // total leads at session start (first response tells us)
 
-    var csrfData = new FormData();
-    csrfData.append('<?php echo $this->security->get_csrf_token_name(); ?>', '<?php echo $this->security->get_csrf_hash(); ?>');
+    var btn      = document.getElementById('btn-start-calling');
+    var btnStop  = document.getElementById('btn-stop-calling');
+    var progress = document.getElementById('calling-progress');
+    var progBar  = document.getElementById('calling-progress-bar');
+    var progText = document.getElementById('calling-progress-text');
+    var progLabel= document.getElementById('calling-progress-label');
+    var result   = document.getElementById('calling-result');
+    var alertBox = document.getElementById('calling-alert');
+    var log      = document.getElementById('calling-log');
 
-    fetch('<?php echo admin_url('ai_calling/start_calling'); ?>', {
-        method : 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        body   : csrfData
-    })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-        result.style.display = 'block';
+    function appendLog(line) {
+        log.textContent += line + '\n';
+        log.scrollTop = log.scrollHeight;
+    }
 
-        if (data.called > 0) {
-            alert.className = 'alert alert-success';
-            alert.innerHTML = '<strong>Done!</strong> Called: ' + data.called +
-                              ' | Failed: ' + data.failed +
-                              ' | Total: ' + data.total +
-                              (data.message ? ' — ' + data.message : '');
-        } else if (data.total === 0 && !data.message) {
-            alert.className = 'alert alert-info';
-            alert.innerHTML = '<strong>No leads</strong> pending to call right now.';
-        } else {
-            alert.className = 'alert alert-warning';
-            alert.innerHTML = '<strong>Warning:</strong> ' + (data.message || 'Check logs for details.');
-        }
+    function updateProgress(called, remaining) {
+        if (totalStarted === 0) totalStarted = called + remaining;
+        var done = totalStarted - remaining;
+        var pct  = totalStarted > 0 ? Math.round((done / totalStarted) * 100) : 0;
+        progBar.style.width   = pct + '%';
+        progText.textContent  = pct + '%';
+        progLabel.textContent = 'Called ' + done + ' of ' + totalStarted + ' leads — ' + remaining + ' remaining';
+    }
 
-        if (data.log && data.log.length > 0) {
-            log.style.display = 'block';
-            log.textContent   = data.log.join('\n');
-        } else {
-            log.style.display = 'none';
-        }
-
-        // Refresh page after 3s to update stats
-        setTimeout(function () { location.reload(); }, 3000);
-    })
-    .catch(function (err) {
-        result.style.display = 'block';
-        alert.className      = 'alert alert-danger';
-        alert.innerHTML      = '<strong>Error:</strong> ' + err.message;
-    })
-    .finally(function () {
+    function finish(stopped) {
         btn.disabled  = false;
-        btn.innerHTML = '<i class="fa fa-phone"></i> Start Calling Now';
+        btn.innerHTML = '<i class="fa fa-phone"></i> Start Calling Now'
+                      + '<small style="display:block;font-size:11px;font-weight:normal;opacity:0.85;">via ' + PROVIDER + '</small>';
+        btnStop.style.display = 'none';
+        progBar.classList.remove('active');
+
+        result.style.display = 'block';
+        if (totalCalled > 0 || totalFailed > 0) {
+            alertBox.className = totalFailed === 0 ? 'alert alert-success' : 'alert alert-warning';
+            alertBox.innerHTML = (stopped ? '<strong>Stopped.</strong> ' : '<strong>Done!</strong> ')
+                               + 'Called: <strong>' + totalCalled + '</strong>'
+                               + ' &nbsp;|&nbsp; Failed: <strong>' + totalFailed + '</strong>';
+        } else {
+            alertBox.className = 'alert alert-info';
+            alertBox.innerHTML = '<strong>No leads</strong> pending to call right now.';
+        }
+
+        setTimeout(function () { location.reload(); }, 3000);
+    }
+
+    function callNext() {
+        if (stopRequested) { finish(true); return; }
+
+        var fd = new FormData();
+        fd.append(CSRF_NAME, CSRF_HASH);
+
+        fetch(CALL_URL, { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' }, body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            // Update CSRF token for next request if server returned a fresh one
+            if (data.csrf) { CSRF_HASH = data.csrf; }
+
+            if (data.done && data.remaining === 0 && totalCalled === 0 && totalFailed === 0) {
+                // Nothing to call at all
+                finish(false);
+                return;
+            }
+
+            if (data.success) {
+                totalCalled++;
+                appendLog('OK  | ' + data.lead_name + ' | ' + data.phone + ' | ' + data.call_id);
+            } else if (!data.done) {
+                totalFailed++;
+                appendLog('ERR | ' + data.lead_name + ' | ' + data.phone + ' | ' + data.error);
+            }
+
+            if (data.done) {
+                if (data.message) appendLog('--- ' + data.message);
+                finish(false);
+                return;
+            }
+
+            updateProgress(totalCalled + totalFailed, data.remaining);
+
+            // Wait delay then fire next call
+            setTimeout(callNext, DELAY_MS);
+        })
+        .catch(function (err) {
+            appendLog('NET | Request error: ' + err.message);
+            finish(false);
+        });
+    }
+
+    btn.addEventListener('click', function () {
+        stopRequested = false;
+        totalCalled   = 0;
+        totalFailed   = 0;
+        totalStarted  = 0;
+
+        btn.disabled  = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Calling…'
+                      + '<small style="display:block;font-size:11px;font-weight:normal;opacity:0.85;">Queue running…</small>';
+        btnStop.style.display = 'inline-block';
+
+        progress.style.display = 'block';
+        progBar.style.width    = '0%';
+        progBar.classList.add('active');
+        progText.textContent   = '0%';
+        progLabel.textContent  = 'Starting…';
+
+        result.style.display = 'block';
+        alertBox.className   = 'alert alert-info';
+        alertBox.innerHTML   = '<i class="fa fa-spinner fa-spin"></i> Queue running — do not close this tab.';
+        log.textContent      = '';
+
+        callNext();
     });
-});
+
+    btnStop.addEventListener('click', function () {
+        stopRequested = true;
+        btnStop.disabled  = true;
+        btnStop.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Stopping…';
+    });
+})();
 
 function copyCronUrl() {
     var el = document.getElementById('cron-url');

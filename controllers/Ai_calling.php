@@ -241,6 +241,81 @@ class Ai_calling extends AdminController
     }
 
     /**
+     * Calls exactly one pending lead and returns result + remaining count.
+     *
+     * The dashboard JS calls this endpoint in a loop — one request per lead,
+     * with a configurable delay between requests. This avoids PHP timeouts on
+     * shared hosting and gives the user live per-call feedback.
+     *
+     * @route  POST admin/ai_calling/call_one_lead
+     * @return void  Outputs JSON:
+     *   done=true  → { success, done, remaining, message }
+     *   called     → { success, done:false, lead_name, phone, call_id, remaining, csrf }
+     *   failed     → { success:false, done:false, lead_name, phone, error, remaining, csrf }
+     *   blocked    → { success:false, done:true, message, remaining }
+     */
+    public function call_one_lead(): void
+    {
+        header('Content-Type: application/json');
+
+        if (!staff_can('view', AI_CALLING_MODULE_NAME)) {
+            echo json_encode(['success' => false, 'done' => true, 'message' => 'Access denied']);
+            return;
+        }
+
+        $leads = $this->ai_calling_model->get_leads_to_call(1);
+
+        if (empty($leads)) {
+            echo json_encode(['success' => true, 'done' => true, 'remaining' => 0, 'message' => 'No more leads to call.']);
+            return;
+        }
+
+        $lead   = $leads[0];
+        $result = $this->_call_lead($lead);
+
+        // Count how many callable leads are still waiting after this one
+        $q         = $this->db->query("SELECT COUNT(*) AS c FROM tblleads WHERE ai_call_status IN ('pending','failed','callback_scheduled') AND (next_followup_date IS NULL OR next_followup_date <= CURDATE()) AND followup_count < " . (int)(get_option('ai_calling_max_followups') ?: AI_MAX_FOLLOWUPS));
+        $remaining = $q ? max(0, (int)$q->row()->c - 1) : 0; // subtract current lead already being processed
+
+        // Fresh CSRF token so the JS can chain the next request
+        $csrf = $this->security->get_csrf_hash();
+
+        if ($result['success']) {
+            $this->ai_calling_model->mark_lead_called($lead['id'], $result['call_id']);
+            echo json_encode([
+                'success'   => true,
+                'done'      => false,
+                'lead_name' => $lead['name'],
+                'phone'     => $lead['phonenumber'],
+                'call_id'   => $result['call_id'],
+                'remaining' => $remaining,
+                'csrf'      => $csrf,
+            ]);
+            return;
+        }
+
+        if (!empty($result['concurrency_blocked'])) {
+            echo json_encode([
+                'success'   => false,
+                'done'      => true,
+                'message'   => $result['error'],
+                'remaining' => $remaining,
+            ]);
+            return;
+        }
+
+        echo json_encode([
+            'success'   => false,
+            'done'      => false,
+            'lead_name' => $lead['name'],
+            'phone'     => $lead['phonenumber'],
+            'error'     => $result['error'],
+            'remaining' => $remaining,
+            'csrf'      => $csrf,
+        ]);
+    }
+
+    /**
      * Token-authenticated endpoint for scheduled cron jobs.
      *
      * The token in the URL must match AI_CRON_TOKEN; requests with a wrong or
