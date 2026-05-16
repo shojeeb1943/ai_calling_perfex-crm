@@ -488,6 +488,7 @@ class Ai_calling extends AdminController
         $call_id      = $call['id']                       ?? null;
         $transcript   = $data['message']['transcript']    ?? $data['transcript']    ?? '';
         $recording    = $data['message']['recordingUrl']  ?? $call['recordingUrl']  ?? null;
+        $summary      = $data['message']['summary']      ?? $data['summary']      ?? null;
         $ended_reason = $data['message']['endedReason']   ?? $data['endedReason']   ?? null;
 
         // ── Tool call: notifyExpert ──────────────────────────────────────────────
@@ -619,7 +620,7 @@ class Ai_calling extends AdminController
                     $book_phone   = $lead_row['phonenumber'] ?? ($call['customer']['number'] ?? '');
                     $this->ai_calling_model->insert_meeting_booking(
                         $book_lead_id, $book_name, $book_phone, $call_id,
-                        mb_substr($transcript, 0, 1000)
+                        $transcript
                     );
                 } elseif ($is_expert_request) {
                     // Client requested human expert — notify owner via Telegram
@@ -643,7 +644,7 @@ class Ai_calling extends AdminController
 
                 $fields = [
                     'ai_call_status'     => $status,
-                    'ai_call_summary'    => mb_substr($transcript, 0, 1000),
+                    'ai_call_summary'    => $transcript,
                     'call_recording_url' => $recording,
                 ];
 

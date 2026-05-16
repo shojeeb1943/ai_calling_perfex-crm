@@ -286,7 +286,7 @@ class Ai_calling_model extends App_Model
             'lead_name'     => $lead_name,
             'lead_phone'    => $lead_phone,
             'vapi_call_id'  => $vapi_call_id,
-            'booking_notes' => $notes ? mb_substr($notes, 0, 1000) : null,
+            'booking_notes' => $notes ?: null,
             'created_at'    => date('Y-m-d H:i:s'),
         ]);
         return (int) $this->db->insert_id();
